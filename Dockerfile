@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+﻿FROM python:3.10-slim
 
 WORKDIR /app
 
@@ -11,3 +11,4 @@ RUN test -f config.json || cp config.example.json config.json
 EXPOSE 8080
 
 CMD ["python", "main.py"]
+

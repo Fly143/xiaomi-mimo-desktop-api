@@ -1,6 +1,6 @@
-"""MiMo2API Desktop — 主入口
+"""Xiaomi MiMo Desktop API — 主入口
 
-将小米 MiMo Desktop 会话 / 官方 API 转换为 OpenAI + Anthropic 兼容 API。
+MiMo Desktop 会话 / 官方 API → OpenAI + Anthropic 兼容。
 """
 
 import os
@@ -17,15 +17,15 @@ from app.config import config_manager
 from app.routes import router
 
 app = FastAPI(
-    title="MiMo2API Desktop",
-    description="MiMo Desktop 会话 → OpenAI + Anthropic 兼容 API",
+    title="Xiaomi MiMo Desktop API",
+    description="MiMo Desktop session → OpenAI + Anthropic API",
     version="1.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,  # 与 allow_origins=["*"] 不同时开 credentials
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -49,20 +49,14 @@ async def on_startup():
 
 def main():
     port = int(os.getenv("PORT", "8080"))
-    host = os.getenv("HOST", "127.0.0.1")  # 默认仅本机
-    print(
-        f"""
-╔══════════════════════════════════════════════════════════╗
-║              MiMo2API Desktop                             ║
-║     MiMo Desktop session → OpenAI / Anthropic API         ║
-╚══════════════════════════════════════════════════════════╝
-
+    host = os.getenv("HOST", "127.0.0.1")
+    print(f"""
+Xiaomi MiMo Desktop API
   http://{host}:{port}
-  OpenAI:  /v1/chat/completions
+  OpenAI:    /v1/chat/completions
   Anthropic: /v1/messages
-  Admin:   /  (HTTP Basic admin)
-"""
-    )
+  Admin:     /   (HTTP Basic)
+""")
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 

@@ -63,7 +63,7 @@ def _apply_preview_defaults(body: dict) -> dict:
         out["temperature"] = 1.0
     if out.get("top_p") is None:
         out["top_p"] = 0.95
-    if not out.get("max_tokens"):
+    if out.get("max_tokens") is None:
         out["max_tokens"] = 4096
     return out
 

@@ -1,4 +1,4 @@
-# MiMo2API Desktop
+# xiaomi-mimo-desktop-api
 
 将 **小米 MiMo Desktop 会话** 与官方 API 转换为 OpenAI / Anthropic 兼容 API。
 
@@ -16,6 +16,14 @@
 - 支持 `mimo-x-pro-preview` / `mimo-x-flash-preview`
 - 保留 Anthropic `/v1/messages`、工具调用兼容层、多账号
 
+## 相对 9router PR #3921 的加固
+
+- 自动导入 / 导入接口走 HTTP Basic admin，不再裸奔
+- 不移植 `mimoEngine` 写 Desktop `tokens.json` 的路径（commit 2 后已无用且有副作用）
+- 默认 `HOST=127.0.0.1`，CORS 不带 `credentials`
+- 上游 OpenAI 直通，无需 `flattenContent` 这类 content-part 压平 hack
+- 管理页只展示掩码，不回传完整 passToken / api_key
+
 ## 快速开始
 
 ```bash
@@ -25,10 +33,9 @@ python main.py
 # 默认 http://127.0.0.1:8080
 ```
 
-管理页 `/` → HTTP Basic `admin` / `config.json` 里的 `admin_password` → **Import Desktop**。
+管理页 `/` → HTTP Basic `admin` / `config.json` 的 `admin_password` → **自动检测 → 导入**。
 
 ```bash
-# 或 API
 curl -u admin:change-me http://127.0.0.1:8080/api/desktop/auto-import
 curl -u admin:change-me -X POST http://127.0.0.1:8080/api/desktop/import \
   -H 'Content-Type: application/json' -d @import.json
@@ -43,11 +50,11 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"mimo-x-flash-preview","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-## 凭证说明
+## 凭证
 
 | 字段 | 含义 |
 |------|------|
-| `mimo_pass_token` | Desktop cookie 库 `passToken`；用于 SSO 续期与 Preview |
+| `mimo_pass_token` | Desktop cookie 库 `passToken`；SSO 续期与 Preview |
 | `api_key` | `sk-` 官方 key；稳定模型走 `api.xiaomimimo.com` |
 | 两者皆有 | Preview 走 Desktop，其余走官方 API |
 
@@ -55,6 +62,6 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 ## 安全
 
-- 默认 `HOST=127.0.0.1`，不对外监听
-- 改掉 `admin_password` / `api_keys` 再暴露端口
-- 不要在公网用默认 `sk-mimo` / `admin`
+- 默认只监听 `127.0.0.1`
+- 暴露端口前改掉 `admin_password` / `api_keys`
+- `passToken` 等价于账号登录态，按需在 OS 层加密落盘
