@@ -1,119 +1,439 @@
 # xiaomi-mimo-desktop-api
 
-将 **小米 MiMo Desktop 账号会话** 转换为 **OpenAI + Anthropic 兼容 API**（Chat / Responses / Anthropic Messages / 工具调用 / 多账号）。
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-teal)](https://fastapi.tiangolo.com/)
 
-基于 [MiMo2API](https://github.com/Fly143/MiMo2API)：协议层、工具筛分、上下文压缩、Responses、Anthropic 兼容全部保留；**上游从网页 bot（`aistudio.../bot/chat`）换成 Desktop 账号会话**。
+将**小米 MiMo Desktop 账号会话**转换为 **OpenAI + Anthropic 兼容 API**，支持 Desktop 独占模型（`mimo-x-pro-preview` / `mimo-x-flash-preview`）、工具调用、Anthropic Messages API、Responses API、多账号负载均衡。
 
-| | MiMo2API | 本仓库 |
-|--|----------|--------|
-| 上游 | `aistudio.../open-apis/bot/chat` 网页 SSE | `mimo-server-cn.../api/route/chat/completions` |
-| 鉴权 | 手贴 `serviceToken` + `xiaomichatbot_ph` | `passToken` → SSO → `serviceToken`（自动续，30min 缓存） |
-| 模型 | aistudio 全量 + TTS/ASR | **仅 Desktop 独占** `mimo-x-pro-preview` / `mimo-x-flash-preview` |
-| 官方 `api.xiaomimimo.com` | 不代理 | 不代理 |
-| TTS / ASR | 有 | **无**（Desktop 通路没有这些接口） |
+本项目基于 [MiMo2API](https://github.com/Fly143/MiMo2API) 修改：保留协议与业务层，上游从网页 bot 换为 Desktop 账号会话。
 
-## 链路
+> 📖 [English Version](README_EN.md)
 
-```
-passToken (Desktop cookie 库)
-  → passportapi / mimopc SSO
-  → serviceToken cookie (30min 缓存, 401 重试)
-  → POST /api/route/chat/completions   (OpenAI 兼容)
-```
+## 目录
+
+- [特性](#特性)
+- [架构](#架构)
+- [快速开始](#快速开始)
+  - [一键部署](#一键部署)
+  - [手动安装](#手动安装)
+- [配置凭证](#配置凭证)
+  - [方法1：管理页自动导入](#方法1管理页自动导入)
+  - [方法2：API 导入](#方法2api-导入)
+  - [多账号管理](#多账号管理)
+  - [凭证加密存储](#凭证加密存储)
+- [API 使用](#api-使用)
+  - [列出模型](#1-列出模型)
+  - [文本对话](#2-文本对话)
+  - [流式对话](#3-流式对话)
+  - [工具调用（Function Calling）](#4-工具调用function-calling)
+  - [深度思考模式](#5-深度思考模式)
+- [Anthropic Messages API](#anthropic-messages-api)
+- [Responses API 详解](#responses-api-详解)
+- [工具调用详解](#工具调用详解)
+- [管理命令](#管理命令)
+- [项目结构](#项目结构)
+- [配置参考](#配置参考)
+- [依赖](#依赖)
+- [限制与已知问题](#限制与已知问题)
+- [常见问题](#常见问题)
+- [许可](#许可)
 
 ## 特性
 
-- **OpenAI 兼容** — `/v1/chat/completions`（流式/非流式）、`/v1/models`
-- **Anthropic Messages** — `/v1/messages` + count_tokens + batches
-- **Responses API** — `/v1/responses*`
-- **工具调用** — MiMoML / <tool_call> / TOOL_CALL 等多策略提取 + 流式筛分
+- **OpenAI 完全兼容** — 标准 `/v1/chat/completions`（流式/非流式）、`/v1/models`、`/v1/models/{id}`，可直接对接 ChatBox、NextChat、LobeChat 等
+- **Anthropic Messages API 兼容** — 完整支持 `/v1/messages`（流式/非流式）+ count_tokens + batches CRUD，可对接 RikkaHub、Claude Code 等
+- **Responses API** — `/v1/responses*` 系列端点
+- **Desktop 独占模型** — `mimo-x-pro-preview`、`mimo-x-flash-preview`，走 Desktop 账号会话，不依赖网页 bot cookie
+- **会话自动续期** — `passToken` 经 SSO 换 `serviceToken`，30 分钟缓存，401 自动重取重试
+- **工具调用（Function Calling）** — 多策略提取（MiMoML / <tool_call> / TOOL_CALL / JSON 等），自动清洗残留
+- **流式筛分** — 有工具调用时实时分离正文与工具调用，客户端可逐步接收
+- **深度思考** — 支持 `reasoning_effort`，自动分离 `<think>` 块
+- **多账号池** — 多个 Desktop 账号轮询，降低单账号限频
 - **上下文压缩** — 超长对话自动 compress / truncate
-- **多账号** — passToken 轮询
-- **凭证加密** — Fernet（`enc:v1:`），密钥 `.secret_key`
-- **管理页** — Desktop 一键检测导入
+- **凭证加密** — Fernet 加密落盘（`enc:v1:`），密钥 `.secret_key`
+- **CORS 全开** — 允许任意来源跨域访问
+
+> **说明：** Desktop 通路**不提供** TTS（`/v1/audio/speech`）与 ASR（`/v1/audio/transcriptions`）。
+
+## 架构
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                     OpenAI / Anthropic 客户端               │
+│            (ChatBox / LobeChat / Claude Code / curl)      │
+└───────────────┬──────────────────────────────────────────┘
+                │  /v1/chat/completions  |  /v1/messages
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│              xiaomi-mimo-desktop-api (FastAPI)              │
+│  ┌─────────┐  ┌──────────────┐  ┌──────────────────────┐ │
+│  │ routes  │  │ tool_sieve   │  │    mimo_client        │ │
+│  │         │──│ (流式筛分)    │──│ (Desktop 会话代理)     │ │
+│  │anthropic│  │ tool_call    │  │    desktop_session    │ │
+│  └─────────┘  └──────────────┘  └──────────────────────┘ │
+└───────────────┬──────────────────────────────────────────┘
+                │  Cookie: serviceToken (SSO)
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│     mimo-server-cn.xiaomimimo.com                        │
+│     /api/route/chat/completions                          │
+└──────────────────────────────────────────────────────────┘
+```
+
+会话链路：
+
+```
+Desktop cookie 库 (passToken)
+  → passportapi SSO phase1/2
+  → mimopc SSO
+  → /api/sts
+  → serviceToken cookie（30min 缓存，401 重试）
+```
 
 ## 快速开始
 
+### 一键部署
+
 ```bash
+git clone https://github.com/Fly143/xiaomi-mimo-desktop-api.git
+cd xiaomi-mimo-desktop-api
+chmod +x deploy.sh
+./deploy.sh
+```
+
+### 手动安装
+
+```bash
+# 1. 克隆
+git clone https://github.com/Fly143/xiaomi-mimo-desktop-api.git
+cd xiaomi-mimo-desktop-api
+
+# 2. 依赖
 pip install -r requirements.txt
-# 先登录一次 MiMo Desktop；Desktop 运行时会锁 cookie DB，导入前建议退出 Desktop
-./deploy.sh   # 或 python main.py
-# 默认 http://127.0.0.1:8080
+
+# 3. 配置（可选，也可启动后在管理页导入）
+cp config.example.json config.json
+
+# 4. 启动
+python main.py
 ```
 
-管理页 `/` → Basic `admin` / `config.json` 的 `admin_password` → **自动检测 → 导入**。
+默认地址：**http://127.0.0.1:8080**（`HOST` 默认仅本机监听）
+
+**导入前请先登录一次 MiMo Desktop。** Desktop 运行时会独占锁 cookie 数据库，导入失败时先退出 Desktop 再试。
+
+### Docker
 
 ```bash
+docker run -d -p 8080:8080 \
+  -v $(pwd)/config.json:/app/config.json \
+  -v $(pwd)/.secret_key:/app/.secret_key \
+  ghcr.io/fly143/xiaomi-mimo-desktop-api:latest
+```
+
+`config.json` 与 `.secret_key` 需一起挂载。
+
+## 配置凭证
+
+### 方法1：管理页自动导入
+
+1. 确保已登录 MiMo Desktop，然后退出 Desktop（释放 cookie DB 锁）
+2. 打开管理页 http://127.0.0.1:8080
+3. HTTP Basic 登录（用户名 `admin`，密码为 `config.json` 中 `admin_password`）
+4. 点击 **自动检测** → **导入账号**
+
+会读取本机 Desktop 的 `passToken` / `userId` / `cUserId`。
+
+### 方法2：API 导入
+
+```bash
+# 探测本机凭证
 curl -u admin:change-me http://127.0.0.1:8080/api/desktop/auto-import
+
+# 导入
 curl -u admin:change-me -X POST http://127.0.0.1:8080/api/desktop/import \
-  -H 'Content-Type: application/json' \
-  -d '{"mimoPassToken":"...","mimoUserId":"...","uid":"..."}'
+  -H "Content-Type: application/json" \
+  -d '{
+    "mimoPassToken": "…",
+    "mimoUserId": "…",
+    "mimoCUserId": "…",
+    "uid": "…"
+  }'
 ```
 
-## 调用
+### 多账号管理
+
+- 多个 Desktop 账号轮询使用
+- 支持测试连接、删除
+- 同一 uid 重复导入会更新，不重复添加
+
+### 凭证加密存储
+
+`mimo_pass_token` / `mimo_user_id` / `mimo_c_user_id` / `admin_password` 落盘时用 **Fernet** 加密（`enc:v1:` 前缀），密钥在同目录 **`.secret_key`**。
+
+- 两个文件都已在 `.gitignore`
+- 首次保存自动生成 `.secret_key`
+- 旧明文 `config.json` 启动时自动迁移
+- **备份时必须同时备份 `config.json` 和 `.secret_key`**
+
+## API 使用
+
+### 1. 列出模型
 
 ```bash
-# OpenAI
+curl http://127.0.0.1:8080/v1/models \
+  -H "Authorization: Bearer sk-mimo"
+```
+
+Desktop 通路固定返回：
+
+| 模型 ID | 说明 |
+|---------|------|
+| `mimo-x-pro-preview` | Desktop 独占 Pro Preview |
+| `mimo-x-flash-preview` | Desktop 独占 Flash Preview |
+
+### 2. 文本对话
+
+```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
-  -d '{"model":"mimo-x-pro-preview","messages":[{"role":"user","content":"hi"}]}'
-
-# Anthropic
-curl http://127.0.0.1:8080/v1/messages \
-  -H "x-api-key: sk-mimo" -H "Content-Type: application/json" \
-  -d '{"model":"claude-opus-4-6","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}'
+  -d '{
+    "model": "mimo-x-pro-preview",
+    "messages": [
+      {"role": "user", "content": "你好，请用中文回复"}
+    ]
+  }'
 ```
 
-Claude 模型名自动映射：opus 级 → `mimo-x-pro-preview`，sonnet/haiku → `mimo-x-flash-preview`。
+### 3. 流式对话
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-x-flash-preview",
+    "messages": [
+      {"role": "user", "content": "讲个故事"}
+    ],
+    "stream": true
+  }'
+```
+
+返回标准 SSE 流（`data: ...\n\n`），以 `data: [DONE]\n\n` 结束。
+
+### 4. 工具调用（Function Calling）
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-x-pro-preview",
+    "messages": [{"role": "user", "content": "北京今天天气怎么样？"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "查询天气",
+        "parameters": {
+          "type": "object",
+          "properties": {"city": {"type": "string"}},
+          "required": ["city"]
+        }
+      }
+    }]
+  }'
+```
+
+流式时通过 StreamSieve 实时分离正文与 `tool_calls`。
+
+### 5. 深度思考模式
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "mimo-x-pro-preview",
+    "messages": [{"role": "user", "content": "证明勾股定理"}],
+    "reasoning_effort": "high"
+  }'
+```
+
+思考内容在 `reasoning` / `reasoning_content` 字段，或 `<think>` 块中。
+
+## Anthropic Messages API
+
+```bash
+curl http://127.0.0.1:8080/v1/messages \
+  -H "x-api-key: sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-opus-4-6",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "你好"}]
+  }'
+```
+
+Claude 模型名自动映射：
+
+| Anthropic 名 | Desktop 模型 |
+|--------------|--------------|
+| `claude-opus-4-6` / `claude-opus-4-1` / `claude-3-opus` 等 opus 级 | `mimo-x-pro-preview` |
+| `claude-sonnet-*` / `claude-haiku-*` 等 | `mimo-x-flash-preview` |
+
+支持端点：`/v1/messages`、`/v1/messages/count_tokens`、`/v1/messages/batches*` 等。
+
+## Responses API 详解
+
+见 `/v1/responses`、`/v1/responses/{id}`、`/v1/responses/{id}/input_items`、compact / cancel 等。内部基于 Chat Completions + 本地 `response_store` 持久化。
+
+## 工具调用详解
+
+提取策略覆盖 MiMoML（`<|MiMoML|tool_calls>`）、`<tool_call>`、`TOOL_CALL:`、JSON、`<function_call>` XML、中文「调用工具:」等；流式用 `StreamSieve` 实时切分；响应正文中的工具残留会自动清洗。
+
+## 管理命令
+
+```bash
+# 后台启动
+nohup python main.py > mimo.log 2>&1 &
+
+# 停止
+pkill -f 'python main.py'
+
+# 管理页
+open http://127.0.0.1:8080
+```
+
+常用管理 API（需 Basic `admin:password`）：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/accounts` | 账号列表（token 掩码） |
+| POST | `/api/accounts/{idx}/test` | 测试连接 |
+| DELETE | `/api/accounts/{idx}` | 删除账号 |
+| GET | `/api/desktop/auto-import` | 自动检测本机 Desktop 凭证 |
+| POST | `/api/desktop/import` | 导入 passToken |
+| GET | `/api/config` / POST | 读写配置 |
+| GET | `/api/usage` | 本地用量统计 |
 
 ## 项目结构
 
 ```
 xiaomi-mimo-desktop-api/
-├── main.py
+├── main.py                  # 入口 + 启动预探测 + 过期会话清理
 ├── deploy.sh
 ├── requirements.txt
 ├── config.example.json
 ├── config.json              # .gitignore，敏感字段已加密
 ├── .secret_key              # .gitignore，Fernet 密钥
 ├── Dockerfile
-├── web/index.html           # 管理页（Desktop 导入）
+├── web/index.html           # 管理页（Desktop 自动导入）
 └── app/
     ├── desktop_session.py   # passToken → SSO → serviceToken
-    ├── auto_import.py       # 读 Desktop cookie 库
-    ├── mimo_client.py       # Desktop /api/route 客户端
+    ├── auto_import.py       # 读本机 Desktop cookie 库
+    ├── mimo_client.py       # /api/route 客户端 + 旧接口适配
     ├── routes.py            # OpenAI / Responses / 管理
     ├── anthropic_routes.py  # Anthropic Messages
     ├── config.py            # 多账号 + Fernet 加密
-    ├── tool_call.py / tool_sieve.py
-    ├── context_compressor.py / session_store.py
+    ├── tool_call.py         # 工具调用提取
+    ├── tool_sieve.py        # 流式筛分
+    ├── context_compressor.py
+    ├── session_store.py
+    ├── response_store.py
+    ├── usage_store.py
+    ├── batch.py
+    ├── utils.py
     └── ...
 ```
 
-## 凭证
+## 配置参考
 
-| 字段 | 含义 |
+`config.json`：
+
+```json
+{
+  "api_keys": "sk-mimo,sk-another",
+  "admin_password": "enc:v1:gAAAAA...",
+  "mimo_accounts": [
+    {
+      "mimo_pass_token": "enc:v1:gAAAAA...",
+      "mimo_user_id": "enc:v1:gAAAAA...",
+      "mimo_c_user_id": "enc:v1:gAAAAA...",
+      "uid": "2230906476",
+      "login_time": "09-11 01:00",
+      "last_test": "",
+      "is_valid": true
+    }
+  ],
+  "models": [],
+  "tools_passthrough": false,
+  "compression_mode": "compress"
+}
+```
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `api_keys` | 逗号分隔的对外 API Key | `sk-mimo` |
+| `admin_password` | 管理页密码（落盘加密） | `admin` |
+| `mimo_accounts` | Desktop 账号列表 | `[]` |
+| `models` | 自定义模型列表（空=内置两个 Preview） | `[]` |
+| `compression_mode` | `compress` \| `truncation` | `compress` |
+
+**环境变量：**
+
+| 变量 | 说明 | 默认 |
+|------|------|------|
+| `PORT` | 监听端口 | `8080` |
+| `HOST` | 监听地址 | `127.0.0.1` |
+
+## 依赖
+
+- **Python 3.10+**
+- FastAPI 0.115
+- uvicorn 0.32
+- httpx 0.27
+- Pydantic v2
+- cryptography（配置加密）
+
+```bash
+pip install -r requirements.txt
+```
+
+## 限制与已知问题
+
+| 限制 | 说明 |
 |------|------|
-| `mimo_pass_token` | Desktop cookie 库 `passToken` |
-| `mimo_user_id` / `mimo_c_user_id` | 账号标识 cookie |
+| 模型范围 | 仅 `mimo-x-pro-preview`、`mimo-x-flash-preview` |
+| TTS / ASR | 不提供（Desktop `/api/route` 无语音接口） |
+| cookie DB 锁 | Desktop 运行时可能独占 cookie 库，导入失败先退出 Desktop |
+| 会话删除 | 上游无 conversation 删除接口，过期清理只动本地记录 |
+| 并发 | 取决于服务端限制，多账号可缓解 |
+| 不支持 Embeddings | 仅 Chat / Responses / Anthropic Messages |
+| 非流式实际走 SSE | 上游为 SSE，非流式会缓冲后合并返回 |
 
-敏感字段 Fernet 加密落盘；`config.json` + `.secret_key` **一起备份**。
+## 常见问题
 
-## 安全
+**Q: 为什么返回 401 "invalid api key"？**  
+A: 检查 `Authorization: Bearer …`。默认 `sk-mimo`，在 `config.json` 的 `api_keys` 中修改。
 
-- 默认 `HOST=127.0.0.1`
-- 暴露端口前改掉 `admin_password` / `api_keys`
-- `passToken` ≈ 账号登录态
+**Q: 为什么返回 503 "no mimo account"？**  
+A: 管理页尚未导入 Desktop 账号。先登录 MiMo Desktop，退出后自动检测导入。
 
-## 限制
+**Q: 自动检测提示 passToken not found？**  
+A:  
+1. 确认本机登录过 MiMo Desktop  
+2. **退出 Desktop**（它会锁 cookie DB）  
+3. 管理页重新点「自动检测」  
 
-| 项 | 说明 |
-|----|------|
-| 模型 | 仅 `mimo-x-pro-preview` / `mimo-x-flash-preview` |
-| TTS / ASR | 不提供（Desktop 无此接口） |
-| 会话删除 | `/api/route` 无 conversation 删除，清理只动本地记录 |
-| cookie 锁 | Desktop 运行时可能锁 cookie DB，导入失败先退出 Desktop |
+**Q: 导入后对话报 session unavailable？**  
+A: `passToken` 可能已失效。在 Desktop 重新登录一次，退出后再导入。服务会自动 SSO 续期，一般无需手动刷新。
+
+**Q: 备份要注意什么？**  
+A: `config.json` 与 `.secret_key` 必须一起备份。只有 config 没有 key，密文无法解密。
 
 ## 许可
 
