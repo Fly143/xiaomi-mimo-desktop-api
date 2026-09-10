@@ -62,7 +62,7 @@
 <body>
   <div class="wrap">
     <h1>Xiaomi MiMo Desktop API</h1>
-    <p class="sub">Desktop 会话 / 官方 API → OpenAI + Anthropic 兼容</p>
+    <p class="sub">MiMo Desktop 会话 → OpenAI + Anthropic 兼容</p>
 
     <div class="card">
       <h2><span class="dot"></span>Admin 登录</h2>
@@ -100,7 +100,7 @@
       <h2><span class="dot"></span>用法</h2>
       <p class="sub" style="margin-bottom:8px">调用示例：</p>
       <code>curl http://127.0.0.1:8080/v1/chat/completions -H "Authorization: Bearer sk-mimo" -H "Content-Type: application/json" -d '{"model":"mimo-x-flash-preview","messages":[{"role":"user","content":"hi"}]}'</code>
-      <p class="sub" style="margin-top:12px">Preview 模型走 Desktop 会话；稳定模型有 sk- 时走官方 API。</p>
+      <p class="sub" style="margin-top:12px">全部模型走 Desktop 账号会话（passToken → SSO → serviceToken）。</p>
     </div>
   </div>
 

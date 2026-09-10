@@ -811,7 +811,9 @@ _ADMIN_HTML = (_Path(__file__).parent.parent / "web" / "index.html").read_text(e
 
 @router.get("/admin")
 @router.get("/")
-async def admin_page(username: str = Depends(verify_admin)):
+async def admin_page():
+    # 页面本身不 Basic 鉴权，避免浏览器弹窗 + 页内表单登录两次。
+    # 所有 /api/* 仍走 HTTP Basic。
     from starlette.responses import HTMLResponse
     return HTMLResponse(_ADMIN_HTML)
 
