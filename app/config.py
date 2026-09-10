@@ -234,30 +234,34 @@ class ConfigManager:
             return acc
 
     def update_config(self, new_config: dict) -> None:
+        """局部更新：未传入的字段保留原值（可只改 admin_password）。"""
         with self.lock:
-            old_by_uid = {a.uid: a for a in self.config.mimo_accounts}
-            accounts = []
-            for acc in new_config.get("mimo_accounts", []):
-                fields = {k: v for k, v in acc.items() if k in MimoAccount.__dataclass_fields__}
-                prev = old_by_uid.get(fields.get("uid"))
-                if prev:
-                    for k in _SENSITIVE_ACCOUNT_FIELDS:
-                        v = fields.get(k)
-                        if v in ("***", "", None) or (isinstance(v, str) and v.startswith(ENC_PREFIX)):
-                            fields[k] = getattr(prev, k)
-                accounts.append(MimoAccount(**fields))
+            if "mimo_accounts" in new_config:
+                old_by_uid = {a.uid: a for a in self.config.mimo_accounts}
+                accounts = []
+                for acc in new_config.get("mimo_accounts") or []:
+                    fields = {k: v for k, v in acc.items() if k in MimoAccount.__dataclass_fields__}
+                    prev = old_by_uid.get(fields.get("uid"))
+                    if prev:
+                        for k in _SENSITIVE_ACCOUNT_FIELDS:
+                            v = fields.get(k)
+                            if v in ("***", "", None) or (isinstance(v, str) and v.startswith(ENC_PREFIX)):
+                                fields[k] = getattr(prev, k)
+                    accounts.append(MimoAccount(**fields))
+            else:
+                accounts = self.config.mimo_accounts
 
             pw = new_config.get("admin_password", self.config.admin_password)
             if pw in ("***", "", None) or (isinstance(pw, str) and pw.startswith(ENC_PREFIX)):
                 pw = self.config.admin_password
 
             self.config = Config(
-                api_keys=new_config.get("api_keys", DEFAULT_API_KEYS),
+                api_keys=new_config.get("api_keys", self.config.api_keys),
                 admin_password=pw,
                 mimo_accounts=accounts,
-                models=new_config.get("models", []),
-                tools_passthrough=new_config.get("tools_passthrough", DEFAULT_TOOLS_PASSTHROUGH),
-                compression_mode=new_config.get("compression_mode", DEFAULT_COMPRESSION_MODE),
+                models=new_config.get("models", self.config.models),
+                tools_passthrough=new_config.get("tools_passthrough", self.config.tools_passthrough),
+                compression_mode=new_config.get("compression_mode", self.config.compression_mode),
             )
             self.save()
 

@@ -121,6 +121,28 @@ python main.py
 
 默认地址：**http://127.0.0.1:8080**（`HOST` 默认仅本机监听）
 
+### 管理后台
+
+| 项 | 默认值 |
+|----|--------|
+| 地址 | http://127.0.0.1:8080 （浏览器直接打开） |
+| 用户名 | `admin`（固定，不可改） |
+| 密码 | `admin` （`config.json` → `admin_password`） |
+| 调用 API Key | `sk-mimo` （`config.json` → `api_keys`） |
+
+浏览器访问管理页时会弹出 **HTTP Basic** 登录框，输入 `admin` / `admin` 即可。curl 用 `-u admin:admin`。
+
+**修改管理密码 / API Key：**
+
+```bash
+# 服务运行中，用当前密码调管理 API（只传要改的字段，不会清掉账号）
+curl -u admin:admin -X POST http://127.0.0.1:8080/api/config \
+  -H "Content-Type: application/json" \
+  -d '{"admin_password":"你的新密码","api_keys":"sk-新key"}'
+```
+
+改完后 `config.json` 里会存成 `enc:v1:...` 密文，**不要再手改密文**。若服务未启动且配置尚未加密，也可直接编辑 `config.json` 里的明文 `admin_password` / `api_keys`。
+
 **导入前请先登录一次 MiMo Desktop。** Desktop 运行时会独占锁 cookie 数据库，导入失败时先退出 Desktop 再试。
 
 ### Docker
@@ -140,7 +162,7 @@ docker run -d -p 8080:8080 \
 
 1. 确保已登录 MiMo Desktop，然后退出 Desktop（释放 cookie DB 锁）
 2. 打开管理页 http://127.0.0.1:8080
-3. HTTP Basic 登录（用户名 `admin`，密码为 `config.json` 中 `admin_password`）
+3. HTTP Basic 登录：用户名 `admin`，默认密码 `admin`（见上文「管理后台」）
 4. 点击 **自动检测** → **导入账号**
 
 会读取本机 Desktop 的 `passToken` / `userId` / `cUserId`。
