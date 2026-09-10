@@ -493,7 +493,8 @@ async def chat_completions(
                 print(f"[QueryGuard] Warmup chunk failed: {e}")
     try:
         content, think_content, usage, citations = await client.call_api(
-            query, thinking, effective_model, multi_medias, conversation_id=conv_id)
+            query, thinking, effective_model, multi_medias, conversation_id=conv_id,
+            tools=tools_dict)
 
         # 保存用量
         if usage:
@@ -618,7 +619,7 @@ async def _stream_response(
             last_usage = None
 
             pending_text = ""
-            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+            async for sse_data in client.stream_api(query, thinking, model, multi_medias, tools=tools):
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
@@ -724,7 +725,7 @@ async def _stream_response(
             last_usage = None
 
             pending_text = ""
-            async for sse_data in client.stream_api(query, thinking, model, multi_medias):
+            async for sse_data in client.stream_api(query, thinking, model, multi_medias, tools=tools):
                 if sse_data.get("type") == "usage":
                     last_usage = sse_data
                     continue
@@ -1502,7 +1503,7 @@ async def _do_response_chat(body: dict, account) -> tuple:
     thinking = False
     try:
         content, think_content, usage, citations = await client.call_api(
-            query, thinking, effective_model, multi_medias
+            query, thinking, effective_model, multi_medias, tools=tools_dict
         )
     except MimoApiError as e:
         raise HTTPException(

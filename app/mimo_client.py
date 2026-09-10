@@ -25,6 +25,8 @@ from .desktop_session import (
 # Desktop 独占模型需要 xiaomi/ 前缀
 PREVIEW_MODELS = {"mimo-x-pro-preview", "mimo-x-flash-preview"}
 TIMEOUT = 180.0
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
 
 BUILTIN_MODELS = [
     "mimo-x-pro-preview",
@@ -190,11 +192,18 @@ class MimoClient:
         except Exception as e:
             return False, str(e)[:120]
 
-    # ── 兼容 anthropic_routes 的旧接口 ──────────────────────────
+    # ── 兼容 anthropic_routes / routes 的旧接口 ──────────────────
 
-    def _query_body(self, query: str, thinking: bool, model: str,
-                    multi_medias: list | None = None,
-                    attachments: list | None = None) -> dict:
+    def _query_body(
+        self,
+        query: str,
+        thinking: bool,
+        model: str,
+        multi_medias: list | None = None,
+        attachments: list | None = None,
+        tools: list | None = None,
+        stream: bool = False,
+    ) -> dict:
         parts: list = [{"type": "text", "text": query}]
         for m in multi_medias or []:
             url = m.get("url") or m.get("image_url")
@@ -204,10 +213,14 @@ class MimoClient:
         body = {
             "model": model,
             "messages": [{"role": "user", "content": content}],
-            "stream": False,
+            "stream": stream,
         }
         if thinking:
             body["reasoning_effort"] = "high"
+        # Desktop OpenAI 兼容：传原生 tools，优先返回结构化 tool_calls
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
         return body
 
     @staticmethod
@@ -235,18 +248,57 @@ class MimoClient:
             main.append(buf)
         return "".join(main), "\n".join(think)
 
+    @staticmethod
+    def _native_tool_calls_to_text(tool_calls: list) -> str:
+        """OpenAI message.tool_calls → 文本，供 extract_tool_call / StreamSieve 解析。"""
+        lines = []
+        for tc in tool_calls or []:
+            fn = (tc or {}).get("function") or {}
+            name = fn.get("name") or ""
+            args = fn.get("arguments") or "{}"
+            if not name:
+                continue
+            lines.append(f"TOOL_CALL: {name}({args})")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _merge_stream_tool_calls(acc: dict, deltas: list) -> list:
+        """合并 SSE 里分片的 delta.tool_calls，按 index 聚合。"""
+        for d in deltas or []:
+            idx = d.get("index", 0)
+            slot = acc.setdefault(idx, {"id": None, "function": {"name": "", "arguments": ""}})
+            if d.get("id"):
+                slot["id"] = d["id"]
+            fn = d.get("function") or {}
+            if fn.get("name"):
+                slot["function"]["name"] += fn["name"]
+            if fn.get("arguments"):
+                slot["function"]["arguments"] += fn["arguments"]
+        return [acc[i] for i in sorted(acc)]
+
     async def call_api(
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
-        conversation_id: str | None = None,
+        conversation_id: str | None = None, tools: list | None = None,
     ) -> Tuple[str, str, dict, list]:
-        data = await self.chat_completion_json(
-            self._query_body(query, thinking, model, multi_medias, attachments)
-        )
+        body = self._query_body(query, thinking, model, multi_medias, attachments, tools=tools)
+        data = await self.chat_completion_json(body)
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         raw = message.get("content") or ""
         content, think = self._split_think_from_content(raw)
+
+        # OpenAI 原生 reasoning
+        reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+        if reasoning:
+            think = (think + "\n" if think else "") + reasoning
+
+        # OpenAI 原生 tool_calls → 文本，走既有 extract_tool_call
+        native_tc = message.get("tool_calls") or []
+        if native_tc:
+            tc_text = self._native_tool_calls_to_text(native_tc)
+            content = (content + "\n" if content else "") + tc_text
+
         usage = data.get("usage") or {}
         return content, think, {
             "promptTokens": usage.get("prompt_tokens") or 0,
@@ -256,12 +308,12 @@ class MimoClient:
     async def stream_api(
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
-        conversation_id: str | None = None,
+        conversation_id: str | None = None, tools: list | None = None,
     ) -> AsyncIterator[dict]:
-        body = self._query_body(query, thinking, model, multi_medias, attachments)
-        body["stream"] = True
+        body = self._query_body(query, thinking, model, multi_medias, attachments, tools=tools, stream=True)
         body["stream_options"] = {"include_usage": True}
         client = httpx.AsyncClient(timeout=TIMEOUT)
+        tc_acc: dict = {}
         try:
             resp = await self.chat_completion(body, stream=True, client=client)
             async for line in resp.aiter_lines():
@@ -269,6 +321,12 @@ class MimoClient:
                     continue
                 payload = line[5:].strip()
                 if payload == "[DONE]":
+                    # 收尾：完整 tool_calls 以文本交给 sieve / extract_tool_call
+                    merged = self._merge_stream_tool_calls(tc_acc, None)
+                    if merged:
+                        text = self._native_tool_calls_to_text(merged)
+                        if text:
+                            yield {"type": "text", "content": "\n" + text + "\n"}
                     break
                 try:
                     chunk = json.loads(payload)
@@ -287,6 +345,9 @@ class MimoClient:
                         yield {"type": "text", "content": delta["content"]}
                     reasoning = delta.get("reasoning_content") or delta.get("reasoning") or ""
                     if reasoning:
-                        yield {"type": "think", "content": reasoning}
+                        # 包成 think 块，routes 既有 THINK_OPEN/CLOSE 逻辑可直接处理
+                        yield {"type": "text", "content": THINK_OPEN + reasoning + THINK_CLOSE}
+                    if delta.get("tool_calls"):
+                        self._merge_stream_tool_calls(tc_acc, delta["tool_calls"])
         finally:
             await client.aclose()
