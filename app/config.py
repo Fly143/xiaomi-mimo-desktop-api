@@ -1,11 +1,7 @@
 """配置管理 — Desktop 版
 
-账号凭证结构：
-  mimo_pass_token / mimo_user_id / mimo_c_user_id  — Desktop passToken
-  api_key                                          — sk- 官方 API key
-  uid                                              — 小米 uid
-
-敏感字段落盘 Fernet 加密（enc:v1: 前缀），密钥在同目录 .secret_key。
+账号凭证：mimo_pass_token / mimo_user_id / mimo_c_user_id
+敏感字段落盘 Fernet 加密（enc:v1:），密钥在同目录 .secret_key。
 旧明文配置可加载，下次 save 自动迁移。
 """
 
@@ -30,13 +26,10 @@ _SENSITIVE_ACCOUNT_FIELDS = (
     "mimo_pass_token",
     "mimo_user_id",
     "mimo_c_user_id",
-    "api_key",
 )
 
 
 class SecretBox:
-    """本地密钥 + Fernet 加解密。"""
-
     def __init__(self, config_path: Path):
         self.key_path = config_path.parent / ".secret_key"
         self._fernet: Optional[Fernet] = None
@@ -63,17 +56,15 @@ class SecretBox:
             return ""
         if isinstance(plaintext, str) and plaintext.startswith(ENC_PREFIX):
             return plaintext
-        token = self._load_or_create().encrypt(plaintext.encode("utf-8")).decode("ascii")
-        return ENC_PREFIX + token
+        return ENC_PREFIX + self._load_or_create().encrypt(plaintext.encode("utf-8")).decode("ascii")
 
     def decrypt(self, value: str) -> str:
         if not value:
             return ""
         if not isinstance(value, str) or not value.startswith(ENC_PREFIX):
-            return value  # legacy plaintext
-        blob = value[len(ENC_PREFIX):].encode("ascii")
+            return value
         try:
-            return self._load_or_create().decrypt(blob).decode("utf-8")
+            return self._load_or_create().decrypt(value[len(ENC_PREFIX):].encode("ascii")).decode("utf-8")
         except (InvalidToken, Exception) as e:
             print(f"[Config] decrypt failed ({e}); check .secret_key")
             return ""
@@ -81,15 +72,12 @@ class SecretBox:
 
 @dataclass
 class MimoAccount:
-    """Desktop / 小米账号（内存明文）"""
+    """Desktop 账号（内存明文）"""
 
     mimo_pass_token: str = ""
     mimo_user_id: str = ""
     mimo_c_user_id: str = ""
-    api_key: str = ""
-
     uid: str = ""
-    base_url: str = "https://api.xiaomimimo.com/v1"
     login_time: str = ""
     last_test: str = ""
     is_valid: bool = False
@@ -97,19 +85,13 @@ class MimoAccount:
     def has_session(self) -> bool:
         return bool(self.mimo_pass_token)
 
-    def has_api_key(self) -> bool:
-        return bool(self.api_key and self.api_key.startswith("sk-"))
-
     def to_masked_dict(self) -> dict:
         d = asdict(self)
         pt = self.mimo_pass_token or ""
         d["mimo_pass_token_masked"] = (pt[:8] + "..." + pt[-4:]) if len(pt) > 16 else ("***" if pt else "")
-        key = self.api_key or ""
-        d["api_key_masked"] = (key[:8] + "..." + key[-4:]) if len(key) > 16 else ("***" if key else "")
         d.pop("mimo_pass_token", None)
         d.pop("mimo_user_id", None)
         d.pop("mimo_c_user_id", None)
-        d.pop("api_key", None)
         return d
 
     def to_storage_dict(self, box: SecretBox) -> dict:
@@ -117,9 +99,7 @@ class MimoAccount:
             "mimo_pass_token": box.encrypt(self.mimo_pass_token),
             "mimo_user_id": box.encrypt(self.mimo_user_id),
             "mimo_c_user_id": box.encrypt(self.mimo_c_user_id),
-            "api_key": box.encrypt(self.api_key),
             "uid": self.uid,
-            "base_url": self.base_url,
             "login_time": self.login_time,
             "last_test": self.last_test,
             "is_valid": self.is_valid,
@@ -161,9 +141,7 @@ def _decrypt_account(raw: dict, box: SecretBox) -> MimoAccount:
         mimo_pass_token=box.decrypt(raw.get("mimo_pass_token", "")),
         mimo_user_id=box.decrypt(raw.get("mimo_user_id", "")),
         mimo_c_user_id=box.decrypt(raw.get("mimo_c_user_id", "")),
-        api_key=box.decrypt(raw.get("api_key", "")),
-        uid=raw.get("uid", ""),
-        base_url=raw.get("base_url") or "https://api.xiaomimimo.com/v1",
+        uid=raw.get("uid") or "",
         login_time=raw.get("login_time", ""),
         last_test=raw.get("last_test", ""),
         is_valid=bool(raw.get("is_valid", False)),
@@ -230,8 +208,7 @@ class ConfigManager:
 
     def validate_api_key(self, key: str) -> bool:
         with self.lock:
-            keys = [k.strip() for k in self.config.api_keys.split(",")]
-            return key in keys
+            return key in [k.strip() for k in self.config.api_keys.split(",")]
 
     def get_next_account(self) -> Optional[MimoAccount]:
         with self.lock:
@@ -242,7 +219,6 @@ class ConfigManager:
             return acc
 
     def update_config(self, new_config: dict) -> None:
-        """敏感字段传入 *** / enc: / 空 时保留原值。"""
         with self.lock:
             old_by_uid = {a.uid: a for a in self.config.mimo_accounts}
             accounts = []

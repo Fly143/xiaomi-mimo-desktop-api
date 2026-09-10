@@ -1,7 +1,7 @@
 """API 路由 — MiMo2API Desktop
 
 OpenAI /v1/* 代理 + 模型发现 + 管理后台 + Desktop 凭证导入。
-上游是 OpenAI 兼容的 Desktop /api/route 与官方 api.xiaomimimo.com。
+上游是 Desktop 账号会话的 /api/route/chat/completions（OpenAI 兼容）。
 """
 
 from __future__ import annotations
@@ -262,8 +262,8 @@ async def desktop_auto_import(username: str = Depends(verify_admin)):
 async def desktop_import(request: Request, username: str = Depends(verify_admin)):
     data = await request.json()
     fields = apply_import_payload(data)
-    if not fields["api_key"] and not fields["mimo_pass_token"]:
-        raise HTTPException(400, "Need apiKey or mimoPassToken")
+    if not fields["mimo_pass_token"]:
+        raise HTTPException(400, "Need mimoPassToken from Desktop cookie store")
 
     now = _dt.now().strftime("%m-%d %H:%M")
     uid = fields.get("uid") or fields.get("mimo_user_id") or ""
@@ -274,9 +274,7 @@ async def desktop_import(request: Request, username: str = Depends(verify_admin)
                 mimo_pass_token=fields["mimo_pass_token"] or acc.mimo_pass_token,
                 mimo_user_id=fields["mimo_user_id"] or acc.mimo_user_id,
                 mimo_c_user_id=fields["mimo_c_user_id"] or acc.mimo_c_user_id,
-                api_key=fields["api_key"] or acc.api_key,
                 uid=uid or acc.uid,
-                base_url=fields["base_url"] or acc.base_url,
                 login_time=now,
                 is_valid=True,
             )
@@ -288,9 +286,7 @@ async def desktop_import(request: Request, username: str = Depends(verify_admin)
                 mimo_pass_token=fields["mimo_pass_token"],
                 mimo_user_id=fields["mimo_user_id"],
                 mimo_c_user_id=fields["mimo_c_user_id"],
-                api_key=fields["api_key"],
                 uid=uid,
-                base_url=fields["base_url"],
                 login_time=now,
                 is_valid=True,
             )
@@ -312,7 +308,6 @@ async def list_accounts(username: str = Depends(verify_admin)):
     for acc in config_manager.config.mimo_accounts:
         d = acc.to_masked_dict()
         d["has_session"] = acc.has_session()
-        d["has_api_key"] = acc.has_api_key()
         out.append(d)
     return {"accounts": out}
 

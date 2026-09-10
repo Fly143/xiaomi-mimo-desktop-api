@@ -61,17 +61,6 @@ def sys_platform_is_darwin() -> bool:
     return sys.platform == "darwin"
 
 
-def auth_json_candidates() -> list[Path]:
-    home = Path.home()
-    paths = [home / ".local/share/mimocode/auth.json"]
-    if os.name == "nt":
-        appdata = os.environ.get("APPDATA") or str(home / "AppData/Roaming")
-        paths.append(Path(appdata) / "Xiaomi MiMo/auth.json")
-    else:
-        paths.append(home / "Library/Application Support/mimocode/auth.json")
-    return paths
-
-
 def read_desktop_pass_token() -> Optional[dict]:
     """从 Desktop 的 Chromium cookie 库读取 passToken。
 
@@ -114,27 +103,6 @@ def read_desktop_pass_token() -> Optional[dict]:
             tmp_path.unlink(missing_ok=True)
         except OSError:
             pass
-
-
-def read_auth_json_api_key() -> Optional[dict]:
-    """读取 mimocode auth.json 里的 xiaomi sk- key（官方 API 通路）。"""
-    for p in auth_json_candidates():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        xiaomi = (data or {}).get("xiaomi") or {}
-        key = (xiaomi.get("key") or "").strip()
-        if not key.startswith("sk-"):
-            continue
-        meta = xiaomi.get("metadata") or {}
-        return {
-            "apiKey": key,
-            "uid": meta.get("uid") or None,
-            "baseUrl": meta.get("base_url") or "https://api.xiaomimimo.com/v1",
-            "source": str(p),
-        }
-    return None
 
 
 def _client_sign(nonce: str, ssecurity: str | None) -> str:
