@@ -1,4 +1,4 @@
-"""工具函数 — MiMo2API
+"""工具函数 — xiaomi-mimo-desktop-api
 
 凭证解析、媒体提取/上传、消息构建。
 """

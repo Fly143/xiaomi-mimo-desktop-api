@@ -1,6 +1,6 @@
 #!/bin/bash
-# MiMo2API 一键部署脚本
-# 用法: 解压后进入目录，运行 ./deploy.sh
+# xiaomi-mimo-desktop-api 一键部署脚本
+# 用法: 进入目录，运行 ./deploy.sh
 
 set -e
 
@@ -9,12 +9,11 @@ RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${CYAN}=== MiMo2API 部署 ===${NC}"
+echo -e "${CYAN}=== xiaomi-mimo-desktop-api 部署 ===${NC}"
 
 # 检查 Python
 if ! command -v python3 &> /dev/null; then
     echo -e "${RED}✗ 未找到 Python3${NC}"
-    echo "  Termux: pkg install python"
     exit 1
 fi
 
@@ -35,14 +34,15 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple -q
 # 配置文件
 if [ ! -f config.json ]; then
     cp config.example.json config.json
-    echo "已创建 config.json，请配置凭证"
+    echo "已创建 config.json（默认 admin/admin，sk-mimo）"
 fi
 
 echo ""
 echo -e "${GREEN}✓ 部署完成！${NC}"
 echo ""
 echo "启动: ./venv/bin/python main.py"
-echo "后台: nohup ./venv/bin/python main.py > mimo.log 2>&1 &"
+echo "后台: nohup ./venv/bin/python main.py > desktop.log 2>&1 &"
 echo "停止: pkill -f 'python main.py'"
-echo "面板: http://localhost:8080"
+echo "面板: http://127.0.0.1:8080  （admin / admin）"
+echo "导入前请先退出 MiMo Desktop（释放 cookie 库锁）"
 echo ""

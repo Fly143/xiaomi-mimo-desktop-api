@@ -1,6 +1,6 @@
-"""API路由 — MiMo2API
+"""API路由 — xiaomi-mimo-desktop-api
 
-OpenAI 兼容接口 / 模型发现 / 管理后台 / 账号管理。
+OpenAI 兼容接口 / 模型发现 / 管理后台 / Desktop 账号管理。
 """
 
 import time

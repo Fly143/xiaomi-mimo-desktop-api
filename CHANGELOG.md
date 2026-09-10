@@ -1,3 +1,20 @@
+# 更新日志（Changelog）
+
+本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
+
+## [v1.0.0] — 2026-09-11
+
+### 新增
+- **Desktop 会话上游** — `passToken` → SSO → `serviceToken`，代理 `/api/route/chat/completions`
+- **独占模型** — `mimo-x-pro-preview` / `mimo-x-flash-preview`
+- **凭证自动导入** — 管理页一键读本机 Desktop cookie 库
+- **Fernet 加密** — `config.json` 敏感字段 + `.secret_key`
+
+### 移除
+- 网页 bot（aistudio）上游、Cookie/cURL 导入
+- TTS / ASR
+- 官方 `api.xiaomimimo.com` 通路
+
 ## [v2.2.5] — 2026-05-12
 
 ### 新增
@@ -8,10 +25,6 @@
 
 ### Fixed
 - **换行符保留** — `clean_tool_text` 不再 strip 末尾空白
-
-# 更新日志（Changelog）
-
-本文件记录 MiMo2API 的所有重要变更。
 
 ## [v2.2.3] — 2026-05-11
 

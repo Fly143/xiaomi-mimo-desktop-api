@@ -1,5 +1,5 @@
 """
-工具调用模块 — MiMo2API
+工具调用模块 — xiaomi-mimo-desktop-api
 
 将 OpenAI function calling 格式转译为 MiMo 可理解的 MiMoML 提示词，
 并从 MiMo 的纯文本响应中解析回结构化 tool_call。

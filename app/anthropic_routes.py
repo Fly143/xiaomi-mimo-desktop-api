@@ -1,5 +1,5 @@
 """
-Anthropic Messages API 路由 — MiMo2API 适配层
+Anthropic Messages API 路由 — xiaomi-mimo-desktop-api
 
 将 Anthropic Messages API 格式请求转换为 MiMo API 调用并转换回 Anthropic 格式。
 
