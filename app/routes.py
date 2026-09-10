@@ -1699,7 +1699,9 @@ async def _stream_response_events(body: dict, account):
             in_think = False
             buffer = ""
 
-            async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias):
+            async for sse_data in client.stream_api(
+                query, thinking, effective_model, multi_medias, tools=tools_dict
+            ):
                 if sse_data.get("type") == "usage":
                     api_usage = sse_data
                     continue
