@@ -54,8 +54,6 @@
 - **凭证加密** — Fernet 加密落盘（`enc:v1:`），密钥 `.secret_key`
 - **CORS 全开** — 允许任意来源跨域访问
 
-> **说明：** Desktop 通路**不提供** TTS（`/v1/audio/speech`）与 ASR（`/v1/audio/transcriptions`）。
-
 ## 架构
 
 ```
@@ -430,7 +428,6 @@ pip install -r requirements.txt
 | 限制 | 说明 |
 |------|------|
 | 模型范围 | 仅 `mimo-x-pro-preview`、`mimo-x-flash-preview` |
-| TTS / ASR | 不提供（Desktop `/api/route` 无语音接口） |
 | cookie DB 锁 | Desktop 运行时可能独占 cookie 库，导入失败先退出 Desktop |
 | 会话删除 | 上游无 conversation 删除接口，过期清理只动本地记录 |
 | 并发 | 取决于服务端限制，多账号可缓解 |
