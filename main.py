@@ -1,9 +1,11 @@
 """Xiaomi MiMo Desktop API — 主入口
 
-MiMo Desktop 会话 / 官方 API → OpenAI + Anthropic 兼容。
+将小米 MiMo Desktop 账号会话转换为 OpenAI + Anthropic 兼容 API。
 """
 
 import os
+import threading
+import asyncio
 from pathlib import Path
 
 import uvicorn
@@ -11,14 +13,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.anthropic_routes import router as anthropic_router
-from app.batch import init_batch_storage
+from app.routes import router, _do_discover
 from app.config import config_manager
-from app.routes import router
+from app.anthropic_routes import router as anthropic_router
+from app.batch import init_batch_storage as init_anthropic_batches
 
 app = FastAPI(
     title="Xiaomi MiMo Desktop API",
-    description="MiMo Desktop session → OpenAI + Anthropic API",
+    description="MiMo Desktop session → OpenAI + Anthropic API (Chat / Responses / Anthropic Messages)",
     version="1.0.0",
 )
 
@@ -30,33 +32,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+async def startup_discover_models():
+    init_anthropic_batches(str(Path(__file__).parent / ".anthropic_batches"))
+    try:
+        await _do_discover()
+        print("模型预探测完成")
+    except Exception as e:
+        print(f"模型预探测失败（不影响服务）: {e}")
+
+    print("[启动] 后台清理过期会话...")
+    threading.Thread(target=_cleanup_old_sessions, daemon=True).start()
+
+
+def _cleanup_old_sessions():
+    """清理过期会话。Desktop /api/route 无 conversation 删除接口，仅清本地记录。"""
+    import time
+    async def _run():
+        try:
+            from app.session_store import get_expired_sessions, remove_session
+            expired = get_expired_sessions()
+            if not expired:
+                return
+            print(f"[Cleanup] Found {len(expired)} expired sessions (local only)")
+            deleted = 0
+            for account_label, conv_id, model, days_ago in expired:
+                remove_session(account_label, conv_id)
+                deleted += 1
+                print(f"[Cleanup] Removed local: {conv_id[:12]}... ({days_ago}d old)")
+                time.sleep(0.1)
+            print(f"[Cleanup] Done: {deleted}/{len(expired)}")
+        except Exception as e:
+            print(f"[Cleanup] Failed: {e}")
+    asyncio.run(_run())
+
+
 app.include_router(router)
 app.include_router(anthropic_router)
 
-_batch_dir = Path(__file__).parent / ".anthropic_batches"
-init_batch_storage(str(_batch_dir))
+init_anthropic_batches(str(Path(__file__).parent / ".anthropic_batches"))
 
 web_dir = Path(__file__).parent / "web"
 if web_dir.exists():
     app.mount("/static", StaticFiles(directory=str(web_dir)), name="static")
 
 
-@app.on_event("startup")
-async def on_startup():
-    n = len(config_manager.config.mimo_accounts)
-    print(f"[Startup] accounts={n}  api_keys={len(config_manager.config.api_keys.split(','))}")
-
-
 def main():
     port = int(os.getenv("PORT", "8080"))
     host = os.getenv("HOST", "127.0.0.1")
+
     print(f"""
 Xiaomi MiMo Desktop API
-  http://{host}:{port}
-  OpenAI:    /v1/chat/completions
-  Anthropic: /v1/messages
-  Admin:     /   (HTTP Basic)
+  地址: http://{host}:{port}
+  管理: http://{host}:{port}
+  API:  http://{host}:{port}/v1/chat/completions
+  文档: http://{host}:{port}/docs
+
+  API Keys: {len(config_manager.config.api_keys.split(','))} 个
+  Desktop 账号: {len(config_manager.config.mimo_accounts)} 个
+  模型: mimo-x-pro-preview / mimo-x-flash-preview
 """)
+
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 

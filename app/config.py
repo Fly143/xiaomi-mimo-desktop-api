@@ -85,6 +85,21 @@ class MimoAccount:
     def has_session(self) -> bool:
         return bool(self.mimo_pass_token)
 
+    # ── 兼容旧 routes.py 的字段名 ──────────────────────────
+    @property
+    def user_id(self) -> str:
+        return self.mimo_user_id or self.uid
+
+    @property
+    def service_token(self) -> str:
+        """aistudio serviceToken；Desktop 通路不使用，恒为空。"""
+        return ""
+
+    @property
+    def xiaomichatbot_ph(self) -> str:
+        """aistudio 会话标识；Desktop 通路不使用，恒为空。"""
+        return ""
+
     def to_masked_dict(self) -> dict:
         d = asdict(self)
         pt = self.mimo_pass_token or ""
