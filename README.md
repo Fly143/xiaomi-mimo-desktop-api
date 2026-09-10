@@ -55,7 +55,11 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 | `mimo_pass_token` | Desktop cookie 库 `passToken`（SSO 会话根） |
 | `mimo_user_id` / `mimo_c_user_id` | 账号标识 cookie |
 
-`config.json` + `.secret_key` 已 gitignore；敏感字段 Fernet 加密落盘。
+敏感字段 Fernet 加密落盘（`enc:v1:`），密钥在 `.secret_key`。
+
+- `config.json` 与 `.secret_key` 均已 gitignore
+- **备份时两个文件一起备**，丢了 `.secret_key` 密文无法恢复
+- Docker 需同时挂载这两个文件
 
 ## 安全
 
