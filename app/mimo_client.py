@@ -240,7 +240,7 @@ class MimoClient:
         return "".join(main), "\n".join(think)
 
     async def call_api(
-        self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro",
+        self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
         conversation_id: str | None = None,
     ) -> Tuple[str, str, dict, list]:
@@ -258,7 +258,7 @@ class MimoClient:
         }, []
 
     async def stream_api(
-        self, query: str, thinking: bool = False, model: str = "mimo-v2.5-pro",
+        self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
         conversation_id: str | None = None,
     ) -> AsyncIterator[dict]:

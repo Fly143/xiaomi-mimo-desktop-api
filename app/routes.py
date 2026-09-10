@@ -200,7 +200,7 @@ async def chat_completions(
         raise HTTPException(401, detail={"error": {"message": "invalid api key"}})
 
     body = await request.json()
-    model = body.get("model") or "mimo-v2.5-pro"
+    model = body.get("model") or "mimo-x-pro-preview"
     stream = bool(body.get("stream"))
     account = _pick_account()
     client = MimoClient(account)

@@ -45,7 +45,7 @@ curl -u admin:change-me -X POST http://127.0.0.1:8080/api/desktop/import \
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Authorization: Bearer sk-mimo" \
   -H "Content-Type: application/json" \
-  -d '{"model":"mimo-v2.5-pro","messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"mimo-x-pro-preview","messages":[{"role":"user","content":"hi"}]}'
 ```
 
 ## 凭证
