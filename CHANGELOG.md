@@ -2,6 +2,15 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.0.2] — 2026-09-11
+
+### 修复
+- **Responses / Claude 带 tools 400** — 扁平 tools 与 `function: null` 规范化为 Chat Completions 格式
+- **Claude / Responses 透传 tools** — 流式与非流式均传给 Desktop 上游
+
+### 变更
+- **`tools_passthrough` 默认 `true`** — Desktop 走原生 tools/tool_calls
+
 ## [v1.0.1] — 2026-09-11
 
 ### 修复
