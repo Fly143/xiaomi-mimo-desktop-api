@@ -92,14 +92,8 @@ def _safe_flush(text: str) -> Tuple[str, str]:
 
 def _model_context(model_id: str) -> Optional[dict]:
     m = model_id.lower()
-    if "preview" in m:
+    if "preview" in m or m.startswith("mimo-x-"):
         return {"context_length": 262144, "max_output_tokens": 32768}
-    if any(x in m for x in ("v2.5-pro", "v2-pro", "v2.5")):
-        return {"context_length": 1048576, "max_output_tokens": 131072}
-    if "v2-flash" in m:
-        return {"context_length": 262144, "max_output_tokens": 65536}
-    if "v2-omni" in m:
-        return {"context_length": 262144, "max_output_tokens": 131072}
     return None
 
 
@@ -124,14 +118,7 @@ async def _resolve_models() -> list[str]:
             return list(config_manager.config.models)
         acc = config_manager.get_next_account()
         if not acc:
-            return [
-                "mimo-x-pro-preview",
-                "mimo-x-flash-preview",
-                "mimo-v2.5-pro",
-                "mimo-v2.5",
-                "mimo-v2-omni",
-                "mimo-v2-flash",
-            ]
+            return ["mimo-x-pro-preview", "mimo-x-flash-preview"]
         try:
             ids = await MimoClient(acc).list_models()
             if ids:
@@ -139,14 +126,7 @@ async def _resolve_models() -> list[str]:
                 return ids
         except Exception:
             pass
-        return _models_cache or [
-            "mimo-x-pro-preview",
-            "mimo-x-flash-preview",
-            "mimo-v2.5-pro",
-            "mimo-v2.5",
-            "mimo-v2-omni",
-            "mimo-v2-flash",
-        ]
+        return _models_cache or ["mimo-x-pro-preview", "mimo-x-flash-preview"]
 
 
 @router.get("/v1/models")

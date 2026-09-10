@@ -29,10 +29,6 @@ TIMEOUT = 180.0
 BUILTIN_MODELS = [
     "mimo-x-pro-preview",
     "mimo-x-flash-preview",
-    "mimo-v2.5-pro",
-    "mimo-v2.5",
-    "mimo-v2-omni",
-    "mimo-v2-flash",
 ]
 
 
@@ -181,7 +177,7 @@ class MimoClient:
         try:
             data = await self.chat_completion_json(
                 {
-                    "model": "mimo-v2.5",
+                    "model": "mimo-x-flash-preview",
                     "messages": [{"role": "user", "content": "hi"}],
                     "max_tokens": 1,
                 }

@@ -86,7 +86,7 @@ def _is_continuation(messages: list, stored_fingerprint: str) -> bool:
 def get_or_create_session(
     account_id: str,
     messages: list,
-    model: str = "mimo-v2.5-pro",
+    model: str = "mimo-x-pro-preview",
 ) -> tuple:
     """获取或创建会话。
 

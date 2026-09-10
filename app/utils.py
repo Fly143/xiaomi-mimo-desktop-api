@@ -156,7 +156,7 @@ async def upload_text_file_to_mimo(
     filename: str,
     mime_type: str,
     account: MimoAccount,
-    model: str = "mimo-v2.5-pro"
+    model: str = "mimo-x-pro-preview"
 ) -> Optional[Dict[str, Any]]:
     """上传文本文件到小米Mimo服务器。
 
@@ -265,7 +265,7 @@ async def upload_media_to_mimo(
     base64_data: str,
     mime_type: str,
     account: MimoAccount,
-    model: str = "mimo-v2.5"
+    model: str = "mimo-x-flash-preview"
 ) -> Optional[Dict[str, Any]]:
     """上传媒体文件到小米Mimo服务器。
 
