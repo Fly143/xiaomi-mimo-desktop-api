@@ -1,0 +1,20 @@
+{
+  "api_keys": "sk-mimo",
+  "admin_password": "change-me",
+  "mimo_accounts": [
+    {
+      "mimo_pass_token": "",
+      "mimo_user_id": "",
+      "mimo_c_user_id": "",
+      "api_key": "",
+      "uid": "",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "login_time": "",
+      "last_test": "",
+      "is_valid": false
+    }
+  ],
+  "models": [],
+  "tools_passthrough": false,
+  "compression_mode": "compress"
+}
