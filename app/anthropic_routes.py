@@ -60,41 +60,74 @@ from .routes import (
 router = APIRouter()
 
 # ── Anthropic 模型名 → MiMo Desktop 模型名映射 ──
-# Claude Code CLI 等工具期望 Anthropic 风格的模型名。
-# Desktop 独占：opus 级 → pro-preview，sonnet/haiku 级 → flash-preview。
+# Desktop 通路仅 Preview 模型：opus 级 → pro-preview，其余 → flash-preview。
 ANTHROPIC_MODEL_ALIASES = {
-    # Claude 4.x
+    # Claude 4.7
+    "claude-opus-4-7": "mimo-x-pro-preview",
+    "claude-sonnet-4-7": "mimo-x-flash-preview",
+    "claude-haiku-4-7": "mimo-x-flash-preview",
+    # Claude 4.6
     "claude-opus-4-6": "mimo-x-pro-preview",
     "claude-sonnet-4-6": "mimo-x-flash-preview",
-    "claude-haiku-4-5": "mimo-x-flash-preview",
+    "claude-haiku-4-6": "mimo-x-flash-preview",
+    # Claude 4.5
+    "claude-opus-4-5": "mimo-x-pro-preview",
     "claude-sonnet-4-5": "mimo-x-flash-preview",
+    "claude-haiku-4-5": "mimo-x-flash-preview",
+    # Claude 4.0 / 4.1
     "claude-opus-4-1": "mimo-x-pro-preview",
     "claude-opus-4-0": "mimo-x-pro-preview",
     "claude-sonnet-4-0": "mimo-x-flash-preview",
+    "claude-haiku-4-0": "mimo-x-flash-preview",
     # Claude 3.x
     "claude-3-7-sonnet": "mimo-x-flash-preview",
     "claude-3-5-sonnet": "mimo-x-flash-preview",
     "claude-3-opus": "mimo-x-pro-preview",
     "claude-3-sonnet": "mimo-x-flash-preview",
     "claude-3-haiku": "mimo-x-flash-preview",
-    # Search / nothinking 变体
+    # Search / nothinking / thinking 变体
+    "claude-opus-4-7-search": "mimo-x-pro-preview",
     "claude-opus-4-6-search": "mimo-x-pro-preview",
+    "claude-sonnet-4-7-search": "mimo-x-flash-preview",
     "claude-sonnet-4-6-search": "mimo-x-flash-preview",
+    "claude-sonnet-4-7-nothinking": "mimo-x-flash-preview",
     "claude-sonnet-4-6-nothinking": "mimo-x-flash-preview",
     "claude-haiku-4-5-nothinking": "mimo-x-flash-preview",
+    "claude-sonnet-4-7-thinking": "mimo-x-flash-preview",
+    "claude-opus-4-7-thinking": "mimo-x-pro-preview",
 }
 
 
 def _resolve_anthropic_model(model: str) -> str:
-    """将 Anthropic 风格模型名映射为 MiMo 内部模型名。
-    
-    如果模型名已经是 MiMo 原生名（mimo-*），直接返回。
-    如果在映射表中，返回对应的 MiMo 名。
-    否则返回原值。
+    """Anthropic 名 → Desktop Preview 模型名。
+
+    - mimo-* 原样返回
+    - 表内精确匹配
+    - 去掉 -YYYYMMDD / -latest 再匹配
+    - 未知 claude-*：含 opus → pro-preview，否则 flash-preview
     """
-    if not model or model.startswith("mimo-"):
+    if not model:
         return model
-    return ANTHROPIC_MODEL_ALIASES.get(model.lower(), model)
+    m = model.lower().strip()
+    if m.startswith("mimo-"):
+        return m
+
+    if m in ANTHROPIC_MODEL_ALIASES:
+        return ANTHROPIC_MODEL_ALIASES[m]
+
+    base = re.sub(r"-\d{8}$", "", m)
+    base = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", base)
+    if base in ANTHROPIC_MODEL_ALIASES:
+        return ANTHROPIC_MODEL_ALIASES[base]
+
+    base = re.sub(r"[-@]latest$", "", base)
+    if base in ANTHROPIC_MODEL_ALIASES:
+        return ANTHROPIC_MODEL_ALIASES[base]
+
+    if m.startswith("claude-"):
+        return "mimo-x-pro-preview" if "opus" in m else "mimo-x-flash-preview"
+
+    return model
 
 # ─── 常量 ─────────────────────────────────────────────────────
 
