@@ -30,7 +30,7 @@ No TTS / ASR on this upstream.
 pip install -r requirements.txt
 # Sign in to MiMo Desktop once, then quit Desktop (cookie DB lock)
 python main.py
-# http://127.0.0.1:8080
+# http://127.0.0.1:8080  (binds 0.0.0.0 by default; set HOST=127.0.0.1 for local-only)
 ```
 
 Admin UI `/` — Basic auth `admin` / `admin_password` → **Detect → Import**.
@@ -57,7 +57,7 @@ Claude aliases: opus-class → `mimo-x-pro-preview`, sonnet/haiku → `mimo-x-fl
 
 | Var | Default |
 |-----|---------|
-| `HOST` | `127.0.0.1` |
+| `HOST` | `0.0.0.0` |
 | `PORT` | `8080` |
 
 ## Security

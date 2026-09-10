@@ -80,7 +80,7 @@ if web_dir.exists():
 
 def main():
     port = int(os.getenv("PORT", "8080"))
-    host = os.getenv("HOST", "127.0.0.1")
+    host = os.getenv("HOST", "0.0.0.0")
 
     print(f"""
 Xiaomi MiMo Desktop API
