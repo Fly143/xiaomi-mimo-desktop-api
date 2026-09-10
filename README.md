@@ -390,7 +390,7 @@ xiaomi-mimo-desktop-api/
     }
   ],
   "models": [],
-  "tools_passthrough": false,
+  "tools_passthrough": true,
   "compression_mode": "compress"
 }
 ```

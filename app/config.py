@@ -18,7 +18,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 DEFAULT_API_KEYS = "sk-mimo"
 DEFAULT_ADMIN_PASSWORD = "admin"
-DEFAULT_TOOLS_PASSTHROUGH = False
+DEFAULT_TOOLS_PASSTHROUGH = True  # Desktop 原生 tools/tool_calls，跳过 MiMoML 说明书
 DEFAULT_COMPRESSION_MODE = "compress"
 
 ENC_PREFIX = "enc:v1:"
