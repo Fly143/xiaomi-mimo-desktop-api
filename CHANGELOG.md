@@ -2,6 +2,13 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.0.1] — 2026-09-11
+
+### 修复
+- **原生 tool_calls 桥接** — Desktop OpenAI `tool_calls` 转为 `TOOL_CALL` 文本，工具调用链路可用（v1.0.0 会丢弃）
+- **reasoning 不再进正文** — `reasoning_content` 包成 `<think>` 块
+- **透传 tools** — 请求体带上 OpenAI `tools`；流式按 index 合并分片
+
 ## [v1.0.0] — 2026-09-11
 
 ### 新增
