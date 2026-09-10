@@ -1,36 +1,93 @@
 """配置管理 — Desktop 版
 
 账号凭证结构：
-  mimoPassToken / mimoUserId / mimoCUserId  — Desktop passToken（会话续期）
-  apiKey                                     — sk- 官方 API key（可选，稳定模型）
-  uid                                        — 小米 uid
+  mimo_pass_token / mimo_user_id / mimo_c_user_id  — Desktop passToken
+  api_key                                          — sk- 官方 API key
+  uid                                              — 小米 uid
+
+敏感字段落盘 Fernet 加密（enc:v1: 前缀），密钥在同目录 .secret_key。
+旧明文配置可加载，下次 save 自动迁移。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import List, Optional
+
+from cryptography.fernet import Fernet, InvalidToken
 
 DEFAULT_API_KEYS = "sk-mimo"
 DEFAULT_ADMIN_PASSWORD = "admin"
 DEFAULT_TOOLS_PASSTHROUGH = False
 DEFAULT_COMPRESSION_MODE = "compress"
 
+ENC_PREFIX = "enc:v1:"
+_SENSITIVE_ACCOUNT_FIELDS = (
+    "mimo_pass_token",
+    "mimo_user_id",
+    "mimo_c_user_id",
+    "api_key",
+)
+
+
+class SecretBox:
+    """本地密钥 + Fernet 加解密。"""
+
+    def __init__(self, config_path: Path):
+        self.key_path = config_path.parent / ".secret_key"
+        self._fernet: Optional[Fernet] = None
+        self._lock = threading.RLock()
+
+    def _load_or_create(self) -> Fernet:
+        with self._lock:
+            if self._fernet is not None:
+                return self._fernet
+            if self.key_path.exists():
+                self._fernet = Fernet(self.key_path.read_bytes().strip())
+                return self._fernet
+            key = Fernet.generate_key()
+            self.key_path.write_bytes(key)
+            try:
+                os.chmod(self.key_path, 0o600)
+            except OSError:
+                pass
+            self._fernet = Fernet(key)
+            return self._fernet
+
+    def encrypt(self, plaintext: str) -> str:
+        if not plaintext:
+            return ""
+        if isinstance(plaintext, str) and plaintext.startswith(ENC_PREFIX):
+            return plaintext
+        token = self._load_or_create().encrypt(plaintext.encode("utf-8")).decode("ascii")
+        return ENC_PREFIX + token
+
+    def decrypt(self, value: str) -> str:
+        if not value:
+            return ""
+        if not isinstance(value, str) or not value.startswith(ENC_PREFIX):
+            return value  # legacy plaintext
+        blob = value[len(ENC_PREFIX):].encode("ascii")
+        try:
+            return self._load_or_create().decrypt(blob).decode("utf-8")
+        except (InvalidToken, Exception) as e:
+            print(f"[Config] decrypt failed ({e}); check .secret_key")
+            return ""
+
 
 @dataclass
 class MimoAccount:
-    """Desktop / 小米账号"""
+    """Desktop / 小米账号（内存明文）"""
 
-    # 会话凭证（二选一或并存）
     mimo_pass_token: str = ""
     mimo_user_id: str = ""
     mimo_c_user_id: str = ""
-    api_key: str = ""  # sk-xxx，官方 OpenAI 兼容 API
+    api_key: str = ""
 
-    # 元数据
     uid: str = ""
     base_url: str = "https://api.xiaomimimo.com/v1"
     login_time: str = ""
@@ -43,15 +100,30 @@ class MimoAccount:
     def has_api_key(self) -> bool:
         return bool(self.api_key and self.api_key.startswith("sk-"))
 
-    def to_dict(self) -> dict:
+    def to_masked_dict(self) -> dict:
         d = asdict(self)
-        pt = d.get("mimo_pass_token") or ""
+        pt = self.mimo_pass_token or ""
         d["mimo_pass_token_masked"] = (pt[:8] + "..." + pt[-4:]) if len(pt) > 16 else ("***" if pt else "")
-        key = d.get("api_key") or ""
+        key = self.api_key or ""
         d["api_key_masked"] = (key[:8] + "..." + key[-4:]) if len(key) > 16 else ("***" if key else "")
         d.pop("mimo_pass_token", None)
+        d.pop("mimo_user_id", None)
+        d.pop("mimo_c_user_id", None)
         d.pop("api_key", None)
         return d
+
+    def to_storage_dict(self, box: SecretBox) -> dict:
+        return {
+            "mimo_pass_token": box.encrypt(self.mimo_pass_token),
+            "mimo_user_id": box.encrypt(self.mimo_user_id),
+            "mimo_c_user_id": box.encrypt(self.mimo_c_user_id),
+            "api_key": box.encrypt(self.api_key),
+            "uid": self.uid,
+            "base_url": self.base_url,
+            "login_time": self.login_time,
+            "last_test": self.last_test,
+            "is_valid": self.is_valid,
+        }
 
 
 @dataclass
@@ -66,38 +138,42 @@ class Config:
     def to_dict(self) -> dict:
         return {
             "api_keys": self.api_keys,
-            "admin_password": self.admin_password,
-            "mimo_accounts": [a.to_dict() for a in self.mimo_accounts],
+            "admin_password": "***" if self.admin_password else "",
+            "mimo_accounts": [a.to_masked_dict() for a in self.mimo_accounts],
             "tools_passthrough": self.tools_passthrough,
             "compression_mode": self.compression_mode,
             "models": self.models,
         }
 
-    def to_save_dict(self) -> dict:
+    def to_save_dict(self, box: SecretBox) -> dict:
         return {
             "api_keys": self.api_keys,
-            "admin_password": self.admin_password,
-            "mimo_accounts": [
-                {k: v for k, v in asdict(a).items()}
-                for a in self.mimo_accounts
-            ],
+            "admin_password": box.encrypt(self.admin_password),
+            "mimo_accounts": [a.to_storage_dict(box) for a in self.mimo_accounts],
             "tools_passthrough": self.tools_passthrough,
             "compression_mode": self.compression_mode,
             "models": self.models,
         }
 
 
-_ACCOUNT_FIELDS = set(MimoAccount.__dataclass_fields__.keys())
-
-
-def _parse_account(raw: dict) -> MimoAccount:
-    # 兼容旧字段名 serviceToken → 不再使用；新字段 snake_case
-    return MimoAccount(**{k: v for k, v in raw.items() if k in _ACCOUNT_FIELDS})
+def _decrypt_account(raw: dict, box: SecretBox) -> MimoAccount:
+    return MimoAccount(
+        mimo_pass_token=box.decrypt(raw.get("mimo_pass_token", "")),
+        mimo_user_id=box.decrypt(raw.get("mimo_user_id", "")),
+        mimo_c_user_id=box.decrypt(raw.get("mimo_c_user_id", "")),
+        api_key=box.decrypt(raw.get("api_key", "")),
+        uid=raw.get("uid", ""),
+        base_url=raw.get("base_url") or "https://api.xiaomimimo.com/v1",
+        login_time=raw.get("login_time", ""),
+        last_test=raw.get("last_test", ""),
+        is_valid=bool(raw.get("is_valid", False)),
+    )
 
 
 class ConfigManager:
     def __init__(self, config_file: str = "config.json"):
         self.config_file = Path(config_file)
+        self.box = SecretBox(self.config_file)
         self.config = Config()
         self.lock = threading.RLock()
         self.account_idx = 0
@@ -109,27 +185,46 @@ class ConfigManager:
             return
         try:
             data = json.loads(self.config_file.read_text(encoding="utf-8"))
-            accounts = [_parse_account(a) for a in data.get("mimo_accounts", [])]
+            accounts = [_decrypt_account(a, self.box) for a in data.get("mimo_accounts", [])]
             self.config = Config(
                 api_keys=data.get("api_keys", DEFAULT_API_KEYS),
-                admin_password=data.get("admin_password", DEFAULT_ADMIN_PASSWORD),
+                admin_password=self.box.decrypt(data.get("admin_password", DEFAULT_ADMIN_PASSWORD)),
                 mimo_accounts=accounts,
                 models=data.get("models", []),
                 tools_passthrough=data.get("tools_passthrough", DEFAULT_TOOLS_PASSTHROUGH),
                 compression_mode=data.get("compression_mode", DEFAULT_COMPRESSION_MODE),
             )
+            if self._has_legacy_plaintext(data):
+                print("[Config] migrating plaintext secrets to encrypted storage")
+                self.save()
         except Exception as e:
             print(f"[Config] load failed: {e}")
             self.config = Config()
             self.save()
 
+    @staticmethod
+    def _has_legacy_plaintext(data: dict) -> bool:
+        pw = data.get("admin_password")
+        if isinstance(pw, str) and pw and not pw.startswith(ENC_PREFIX):
+            return True
+        for acc in data.get("mimo_accounts", []):
+            for k in _SENSITIVE_ACCOUNT_FIELDS:
+                v = acc.get(k)
+                if isinstance(v, str) and v and not v.startswith(ENC_PREFIX):
+                    return True
+        return False
+
     def save(self) -> None:
         with self.lock:
             try:
                 self.config_file.write_text(
-                    json.dumps(self.config.to_save_dict(), indent=2, ensure_ascii=False),
+                    json.dumps(self.config.to_save_dict(self.box), indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
+                try:
+                    os.chmod(self.config_file, 0o600)
+                except OSError:
+                    pass
             except Exception as e:
                 print(f"[Config] save failed: {e}")
 
@@ -147,11 +242,27 @@ class ConfigManager:
             return acc
 
     def update_config(self, new_config: dict) -> None:
+        """敏感字段传入 *** / enc: / 空 时保留原值。"""
         with self.lock:
-            accounts = [_parse_account(a) for a in new_config.get("mimo_accounts", [])]
+            old_by_uid = {a.uid: a for a in self.config.mimo_accounts}
+            accounts = []
+            for acc in new_config.get("mimo_accounts", []):
+                fields = {k: v for k, v in acc.items() if k in MimoAccount.__dataclass_fields__}
+                prev = old_by_uid.get(fields.get("uid"))
+                if prev:
+                    for k in _SENSITIVE_ACCOUNT_FIELDS:
+                        v = fields.get(k)
+                        if v in ("***", "", None) or (isinstance(v, str) and v.startswith(ENC_PREFIX)):
+                            fields[k] = getattr(prev, k)
+                accounts.append(MimoAccount(**fields))
+
+            pw = new_config.get("admin_password", self.config.admin_password)
+            if pw in ("***", "", None) or (isinstance(pw, str) and pw.startswith(ENC_PREFIX)):
+                pw = self.config.admin_password
+
             self.config = Config(
                 api_keys=new_config.get("api_keys", DEFAULT_API_KEYS),
-                admin_password=new_config.get("admin_password", DEFAULT_ADMIN_PASSWORD),
+                admin_password=pw,
                 mimo_accounts=accounts,
                 models=new_config.get("models", []),
                 tools_passthrough=new_config.get("tools_passthrough", DEFAULT_TOOLS_PASSTHROUGH),

@@ -1,4 +1,5 @@
-﻿config.json
+config.json
+.secret_key
 __pycache__/
 *.pyc
 sessions.json
@@ -10,3 +11,4 @@ venv/
 *.apk
 *.bak
 .env
+NUL

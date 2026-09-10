@@ -310,7 +310,7 @@ async def desktop_import(request: Request, username: str = Depends(verify_admin)
 async def list_accounts(username: str = Depends(verify_admin)):
     out = []
     for acc in config_manager.config.mimo_accounts:
-        d = acc.to_dict()
+        d = acc.to_masked_dict()
         d["has_session"] = acc.has_session()
         d["has_api_key"] = acc.has_api_key()
         out.append(d)
