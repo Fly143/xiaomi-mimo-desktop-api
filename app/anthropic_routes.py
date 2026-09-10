@@ -559,7 +559,10 @@ async def anthropic_messages(
     # ═══════════════════════════════════════════════════════════
     if stream:
         async def _wrap():
-            mimo_gen = client.stream_api(query, False, model, multi_medias=multi_medias, conversation_id=conv_id)
+            mimo_gen = client.stream_api(
+                query, False, model, multi_medias=multi_medias,
+                conversation_id=conv_id, tools=tools_dict,
+            )
             async for event in _anthropic_stream_think_wrapper(
                 mimo_gen, model, msg_id, tool_names=tool_names,
             ):
@@ -580,6 +583,7 @@ async def anthropic_messages(
     try:
         content, think_content, usage, _ = await client.call_api(
             query, False, model, multi_medias=multi_medias, conversation_id=conv_id,
+            tools=tools_dict,
         )
 
         # 保存用量

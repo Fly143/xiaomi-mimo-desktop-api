@@ -194,6 +194,44 @@ class MimoClient:
 
     # ── 兼容 anthropic_routes / routes 的旧接口 ──────────────────
 
+    @staticmethod
+    def _normalize_tools(tools: list | None) -> list | None:
+        """规范化为 Chat Completions 的 {type, function:{name,...}} 格式。
+
+        Responses API 的 tools 是扁平的（name/parameters 在顶层），
+        直接透传会让上游报 `function' is null`。
+        非 function 类型（web_search / computer_use 等）丢弃。
+        """
+        if not tools:
+            return None
+        out = []
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            fn = t.get("function")
+            # Chat Completions 标准格式
+            if isinstance(fn, dict) and fn.get("name"):
+                out.append({
+                    "type": "function",
+                    "function": {
+                        "name": fn["name"],
+                        "description": fn.get("description") or "",
+                        "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+                    },
+                })
+                continue
+            # Responses API 扁平格式：{type:function, name, parameters, description}
+            if t.get("name") and (t.get("type") in (None, "function")):
+                out.append({
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t.get("description") or "",
+                        "parameters": t.get("parameters") or {"type": "object", "properties": {}},
+                    },
+                })
+        return out or None
+
     def _query_body(
         self,
         query: str,
@@ -218,8 +256,9 @@ class MimoClient:
         if thinking:
             body["reasoning_effort"] = "high"
         # Desktop OpenAI 兼容：传原生 tools，优先返回结构化 tool_calls
-        if tools:
-            body["tools"] = tools
+        norm_tools = self._normalize_tools(tools)
+        if norm_tools:
+            body["tools"] = norm_tools
             body["tool_choice"] = "auto"
         return body
 
