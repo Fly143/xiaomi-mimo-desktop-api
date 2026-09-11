@@ -172,11 +172,16 @@ class MimoClient:
         return list(BUILTIN_MODELS)
 
     async def test_connection(self) -> Tuple[bool, str]:
-        """探活：打一次最小流式请求验证 Desktop 会话。
-        按用户\"全部移除限制\"指令：不填 max_tokens，让上游/模型自行决定输出长度。"""
+        """探活：先取 session cookie，再打最小请求。"""
         if not self.account.has_session():
             return False, "no passToken configured"
         try:
+            import httpx as _hx
+            from .desktop_session import get_service_cookie
+            async with _hx.AsyncClient(timeout=20.0) as c:
+                cookie = await get_service_cookie(self._credentials(), c)
+            if not cookie:
+                return False, "SSO failed (passToken expired, or phone cannot reach account.xiaomi.com / mimo-server-cn)"
             data = await self.chat_completion_json(
                 {
                     "model": "mimo-x-flash-preview",
@@ -189,7 +194,7 @@ class MimoClient:
         except MimoApiError as e:
             return False, f"HTTP {e.status_code}: {e.response_body[:80]}"
         except Exception as e:
-            return False, str(e)[:120]
+            return False, str(e)[:160]
 
     # ── 兼容 anthropic_routes / routes 的旧接口 ──────────────────
 
