@@ -317,7 +317,7 @@ class MimoClient:
     async def call_api(
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
-        conversation_id: str | None = None, tools: list | None = None,
+        tools: list | None = None,
     ) -> Tuple[str, str, dict, list, list]:
         body = self._query_body(query, thinking, model, multi_medias, attachments, tools=tools)
         data = await self.chat_completion_json(body)
@@ -344,7 +344,7 @@ class MimoClient:
     async def stream_api(
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
-        conversation_id: str | None = None, tools: list | None = None,
+        tools: list | None = None,
     ) -> AsyncIterator[dict]:
         body = self._query_body(query, thinking, model, multi_medias, attachments, tools=tools, stream=True)
         body["stream_options"] = {"include_usage": True}

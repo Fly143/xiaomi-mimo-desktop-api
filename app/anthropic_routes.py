@@ -45,11 +45,6 @@ from .models import OpenAIMessage
 from .utils import build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
 from .tool_call import extract_tool_call, get_tool_names, clean_tool_text
 from .context_compressor import compress_messages, truncate_messages, should_compress
-from .session_store import (
-    get_or_create_session as _get_or_create_session,
-    update_tokens as _update_session_tokens,
-    update_fingerprint as _update_session_fingerprint,
-)
 from .usage_store import add_usage as _add_usage
 from .routes import (
     _strip_tool_result_blocks,
@@ -537,11 +532,6 @@ async def anthropic_messages(
             if media_obj:
                 multi_medias.append(media_obj)
 
-    # ── 会话管理 ──
-    conv_id, conv_is_new = _get_or_create_session(
-        account.user_id, msgs_as_objects, model,
-    )
-
     # 上游无状态：始终携带完整历史，理由见 routes.py 同名修复注释
     client = MimoClient(account)
     if should_compress(msgs_as_objects):
@@ -564,7 +554,7 @@ async def anthropic_messages(
         async def _wrap():
             mimo_gen = client.stream_api(
                 query, False, model, multi_medias=multi_medias,
-                conversation_id=conv_id, tools=tools_dict,
+                tools=tools_dict,
             )
             async for event in _anthropic_stream_think_wrapper(
                 mimo_gen, model, msg_id, tool_names=tool_names,
@@ -585,14 +575,13 @@ async def anthropic_messages(
     # ═══════════════════════════════════════════════════════════
     try:
         content, think_content, usage, _, native_tool_calls = await client.call_api(
-            query, False, model, multi_medias=multi_medias, conversation_id=conv_id,
+            query, False, model, multi_medias=multi_medias,
             tools=tools_dict,
         )
 
         # 保存用量
         if usage:
             _add_usage(model, usage.get("promptTokens", 0), usage.get("completionTokens", 0))
-            _update_session_tokens(account.user_id, conv_id, usage.get("promptTokens", 0))
 
         # 清理模型输出
         # 优先用上游原生 tool_calls；无原生时回退到文本解析

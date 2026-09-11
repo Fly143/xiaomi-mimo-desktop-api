@@ -4,8 +4,6 @@
 """
 
 import os
-import threading
-import asyncio
 from pathlib import Path
 
 import uvicorn
@@ -21,7 +19,7 @@ from app.batch import init_batch_storage as init_anthropic_batches
 app = FastAPI(
     title="Xiaomi MiMo Desktop API",
     description="MiMo Desktop session → OpenAI + Anthropic API (Chat / Responses / Anthropic Messages)",
-    version="1.0.7",
+    version="1.0.8",
 )
 
 app.add_middleware(
@@ -42,30 +40,6 @@ async def startup_discover_models():
     except Exception as e:
         print(f"模型预探测失败（不影响服务）: {e}")
 
-    print("[启动] 后台清理过期会话...")
-    threading.Thread(target=_cleanup_old_sessions, daemon=True).start()
-
-
-def _cleanup_old_sessions():
-    """清理过期会话。Desktop /api/route 无 conversation 删除接口，仅清本地记录。"""
-    import time
-    async def _run():
-        try:
-            from app.session_store import get_expired_sessions, remove_session
-            expired = get_expired_sessions()
-            if not expired:
-                return
-            print(f"[Cleanup] Found {len(expired)} expired sessions (local only)")
-            deleted = 0
-            for account_label, conv_id, model, days_ago in expired:
-                remove_session(account_label, conv_id)
-                deleted += 1
-                print(f"[Cleanup] Removed local: {conv_id[:12]}... ({days_ago}d old)")
-                time.sleep(0.1)
-            print(f"[Cleanup] Done: {deleted}/{len(expired)}")
-        except Exception as e:
-            print(f"[Cleanup] Failed: {e}")
-    asyncio.run(_run())
 
 
 app.include_router(router)
