@@ -100,8 +100,8 @@ class MimoClient:
                 out["temperature"] = 1.0
             if out.get("top_p") is None:
                 out["top_p"] = 0.95
-            if out.get("max_tokens") is None:
-                out["max_tokens"] = 4096
+            # 不猜 max_tokens：上游语义未知（可能是 reasoning + 正文的合计预算），
+            # 代理层填默认值容易让思考链吃光预算导致正文为空。未显式指定时透传。
         return out
 
     async def chat_completion(
