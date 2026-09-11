@@ -2,6 +2,16 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.0.6] — 2026-09-11
+
+### 修复
+- **`test_connection` 探活请求仍塞了 `max_tokens: 1`** — 上次清理 `/v1/chat` 默认值时
+  漏掉了这一处。`MiMoClient.test_connection`（管理后台"测试连接"按钮与启动期账号健康检查
+  都会调）发的最小请求被强制 1 token 上限，与"全部移除限制"指令不一致。
+  移除该字段并改注释，由上游/模型自行决定输出长度。
+  注：聊天路径（`/v1/chat/completions`、`/v1/messages`、`/v1/responses`）早已透传无默认，
+  这次仅清理探活一处。
+
 ## [v1.0.3] — 2026-09-11
 
 ### 修复

@@ -172,8 +172,8 @@ class MimoClient:
         return list(BUILTIN_MODELS)
 
     async def test_connection(self) -> Tuple[bool, str]:
-        """探活：用最小对话验证 Desktop 会话，结束后删除临时会话不可用
-        （/api/route 无 conversation 概念），故只打一次 max_tokens 极小请求。"""
+        """探活：打一次最小流式请求验证 Desktop 会话。
+        按用户\"全部移除限制\"指令：不填 max_tokens，让上游/模型自行决定输出长度。"""
         if not self.account.has_session():
             return False, "no passToken configured"
         try:
@@ -181,7 +181,6 @@ class MimoClient:
                 {
                     "model": "mimo-x-flash-preview",
                     "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 1,
                 }
             )
             if data.get("error"):
