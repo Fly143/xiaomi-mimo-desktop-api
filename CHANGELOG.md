@@ -2,6 +2,12 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.0.9] — 2026-09-11
+
+### 清理
+- 删除未使用的 `_native_tool_calls_to_text`（原生 tool_calls 已直通，不再转文本）
+- `auto_import.py` 去掉过时的官方 API 注释
+
 ## [v1.0.8] — 2026-09-11
 
 ### 清理

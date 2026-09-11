@@ -1,7 +1,6 @@
 """Desktop 凭证自动导入
 
 只读本机 MiMo Desktop cookie 库的 passToken。
-不读 mimocode auth.json 的 sk- key（那是官方 API，本项目不代理）。
 """
 
 from __future__ import annotations
