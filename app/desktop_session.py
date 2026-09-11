@@ -50,7 +50,7 @@ def desktop_cookie_path() -> Optional[Path]:
     if os.name == "nt":
         p = home / "AppData/Roaming/Xiaomi MiMo/Partitions/xiaomi-account/Network/Cookies"
     elif sys_platform_is_darwin():
-        p = home / "Library/Application Support/Xiaomi MiMo/Partitions/xiaomi-account/Network/Cookies"
+        p = home / "Library/Application Support/Xiaomi MiMo/Partitions/xiaomi-account/Cookies"
     else:
         p = home / ".config/Xiaomi MiMo/Partitions/xiaomi-account/Network/Cookies"
     return p if p.exists() else None
