@@ -43,6 +43,17 @@ _cache: dict[str, dict] = {}
 _cache_lock = threading.Lock()
 _inflight: dict[str, threading.Event] = {}
 _inflight_result: dict[str, Optional[str]] = {}
+_last_sso_error: str = ""
+
+
+def last_sso_error() -> str:
+    return _last_sso_error
+
+
+def _set_sso_error(msg: str) -> None:
+    global _last_sso_error
+    _last_sso_error = msg
+    print("[SSO]", msg)
 
 
 def desktop_cookie_path() -> Optional[Path]:
@@ -131,91 +142,110 @@ def _cookie_header(jar: dict) -> str:
 async def _acquire_service_cookie(
     pass_jar: dict, client: httpx.AsyncClient
 ) -> Optional[str]:
-    jar = dict(pass_jar)
+    jar = {k: v for k, v in pass_jar.items() if v}
     ck = lambda: _cookie_header(jar)  # noqa: E731
 
-    # 1. 未认证 API → 302 携带 sts callback
-    r1 = await client.get(
-        f"{API_BASE}/api/user/xiaomi/me",
-        headers={"User-Agent": API_UA, "Cookie": ck()},
-        follow_redirects=False,
-    )
+    try:
+        r1 = await client.get(
+            f"{API_BASE}/api/user/xiaomi/me",
+            headers={"User-Agent": API_UA, "Cookie": ck()},
+            follow_redirects=False,
+        )
+    except Exception as e:
+        _set_sso_error(f"step1 mimo-server me: {type(e).__name__}: {e}")
+        return None
     location = r1.headers.get("location")
     if not location:
+        _set_sso_error(f"step1 no location (HTTP {r1.status_code})")
         return None
     sts_callback = parse_qs(urlparse(location).query).get("callback", [None])[0]
     if not sts_callback:
+        _set_sso_error("step1 no callback in location")
         return None
 
-    # 2. passportapi SSO phase 1 → nonce + ssecurity
-    sso1 = await client.get(
-        f"https://{ACCOUNT_HOST}/pass/serviceLogin",
-        params={"sid": "passportapi", "_json": "true"},
-        headers={"Cookie": ck(), "User-Agent": SSO_UA, "Accept": "application/json"},
-    )
+    try:
+        sso1 = await client.get(
+            f"https://{ACCOUNT_HOST}/pass/serviceLogin",
+            params={"sid": "passportapi", "_json": "true"},
+            headers={"Cookie": ck(), "User-Agent": SSO_UA, "Accept": "application/json"},
+            follow_redirects=False,
+        )
+    except Exception as e:
+        _set_sso_error(f"step2 account.xiaomi.com: {type(e).__name__}: {e}")
+        return None
     text1 = sso1.text
     if text1.startswith("&&&START&&&"):
         text1 = text1[len("&&&START&&&"):]
     try:
         j1 = json.loads(text1)
     except json.JSONDecodeError:
+        _set_sso_error(f"step2 bad json HTTP {sso1.status_code}")
         return None
 
     location1 = j1.get("location")
     if not location1:
+        _set_sso_error(f"step2 no location (code={j1.get('code')})")
         return None
     nonce = j1.get("nonce")
     if not nonce:
-        qs = parse_qs(urlparse(location1).query)
-        nonce = (qs.get("nonce") or [None])[0]
+        nonce = (parse_qs(urlparse(location1).query).get("nonce") or [None])[0]
     if not nonce:
+        _set_sso_error("step2 no nonce")
         return None
 
-    # 3. passportapi SSO phase 2 → 账号级 serviceToken
     sep = "&" if "?" in location1 else "?"
-    sso2 = await client.get(
-        f"{location1}{sep}clientSign={_client_sign(nonce, j1.get('ssecurity'))}",
-        headers={"Cookie": ck(), "User-Agent": SSO_UA},
-        follow_redirects=False,
-    )
+    try:
+        sso2 = await client.get(
+            f"{location1}{sep}clientSign={_client_sign(nonce, j1.get('ssecurity'))}",
+            headers={"Cookie": ck(), "User-Agent": SSO_UA},
+            follow_redirects=False,
+        )
+    except Exception as e:
+        _set_sso_error(f"step3 sso phase2: {type(e).__name__}: {e}")
+        return None
     _absorb_set_cookie(jar, sso2)
 
-    # 4. mimopc SSO → sts callback ticket
-    sso3 = await client.get(
-        f"https://{ACCOUNT_HOST}/pass/serviceLogin",
-        params={
-            "sid": "mimopc",
-            "callback": sts_callback,
-            "_json": "true",
-        },
-        headers={"Cookie": ck(), "User-Agent": SSO_UA, "Accept": "application/json"},
-    )
+    try:
+        sso3 = await client.get(
+            f"https://{ACCOUNT_HOST}/pass/serviceLogin",
+            params={"sid": "mimopc", "callback": sts_callback, "_json": "true"},
+            headers={"Cookie": ck(), "User-Agent": SSO_UA, "Accept": "application/json"},
+            follow_redirects=False,
+        )
+    except Exception as e:
+        _set_sso_error(f"step4 mimopc: {type(e).__name__}: {e}")
+        return None
     text3 = sso3.text
     if text3.startswith("&&&START&&&"):
         text3 = text3[len("&&&START&&&"):]
     try:
         j3 = json.loads(text3)
     except json.JSONDecodeError:
+        _set_sso_error(f"step4 bad json HTTP {sso3.status_code}")
         return None
     _absorb_set_cookie(jar, sso3)
-
     loc3 = j3.get("location") or ""
     if "/api/sts" not in loc3:
+        _set_sso_error(f"step4 no sts (code={j3.get('code')})")
         return None
 
-    # 5. sts callback → Set-Cookie: serviceToken
-    sts = await client.get(
-        loc3,
-        headers={"User-Agent": API_UA, "Cookie": ck()},
-        follow_redirects=False,
-    )
+    try:
+        sts = await client.get(
+            loc3,
+            headers={"User-Agent": API_UA, "Cookie": ck()},
+            follow_redirects=False,
+        )
+    except Exception as e:
+        _set_sso_error(f"step5 sts: {type(e).__name__}: {e}")
+        return None
     _absorb_set_cookie(jar, sts)
-
     if not jar.get("serviceToken"):
+        _set_sso_error(f"step5 no serviceToken (HTTP {sts.status_code})")
         return None
 
     needed = ["serviceToken", "mimopc_ph", "mimopc_slh", "userId"]
     out = {k: jar[k] for k in needed if jar.get(k)}
+    _set_sso_error("")
     return _cookie_header(out)
 
 

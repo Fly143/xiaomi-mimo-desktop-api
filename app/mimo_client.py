@@ -176,12 +176,10 @@ class MimoClient:
         if not self.account.has_session():
             return False, "no passToken configured"
         try:
-            import httpx as _hx
-            from .desktop_session import get_service_cookie
-            async with _hx.AsyncClient(timeout=20.0) as c:
-                cookie = await get_service_cookie(self._credentials(), c)
+            from .desktop_session import get_service_cookie, last_sso_error
+            cookie = await get_service_cookie(self._credentials())
             if not cookie:
-                return False, "SSO failed (passToken expired, or phone cannot reach account.xiaomi.com / mimo-server-cn)"
+                return False, "SSO failed: " + (last_sso_error() or "unknown step")
             data = await self.chat_completion_json(
                 {
                     "model": "mimo-x-flash-preview",
