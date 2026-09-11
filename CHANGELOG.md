@@ -2,6 +2,26 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.0.7] — 2026-09-11
+
+### 修复
+- **Desktop 上游原生 tool_calls 直通** — 小米 Desktop 上游（`/api/route/chat/completions`）原生
+  支持 OpenAI `tools` 字段并以 `delta.tool_calls` 分片返回 + `finish_reason="tool_calls"` 收尾
+  （基于已修 bug v1.0.3 的 mimo_client 调用模式推断）。改造（与 workbuddy-desktop-api v1.1.7 同模式）：
+  - `MimoClient.stream_api`：原生 `delta.tool_calls` 仅累积不 yield 文本；流结束 yield
+    `{"type": "tool_calls", "calls": merged}` + `{"type": "finish", "reason": ...}` 事件
+  - `MimoClient.call_api`：原生 `message.tool_calls` 作为第五返回值透传，不再混入 content
+  - `routes._stream_response`：has_tools 分支处理原生 tool_calls/finish 事件，删 StreamSieve 文本→解析
+  - `routes.chat_completions`：优先用 call_api 返回的 native_tool_calls；无原生才回退文本解析
+  - `anthropic_routes.py`：流式 + 非流式同步改造（流式保留 StreamSieve 作为 fallback）
+  - `models.OpenAIMessage`：增加 `reasoning` / `reasoning_content` 字段；`_build_response` 在
+    非流式响应（含工具调用）中带出 think_content，不再丢失
+  - `build_tool_prompt` passthrough=True 改为直接 return ""，prompt 中不塞任何工具指令
+
+### 变更（行为）
+- prompt 端不再有英文工具指令（passthrough=True 之前塞的"You have the following tools..."
+ 现在 Desktop 上游原生协议已足够）
+
 ## [v1.0.6] — 2026-09-11
 
 ### 修复
