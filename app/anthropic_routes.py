@@ -700,7 +700,7 @@ async def anthropic_create_batch_ep(request: Request):
 
         client = MimoClient(account)
         try:
-            c, tc, usage, _ = await client.call_api(query, False, model)
+            c, tc, usage, _, _ = await client.call_api(query, False, model)
             message = {"role": "assistant", "content": c}
             if tc:
                 message["reasoning_content"] = tc
