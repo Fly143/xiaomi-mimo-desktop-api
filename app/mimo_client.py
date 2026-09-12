@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import AsyncIterator, Optional, Tuple
 
 import httpx
@@ -24,7 +25,8 @@ from .desktop_session import (
 
 # Desktop 独占模型需要 xiaomi/ 前缀
 PREVIEW_MODELS = {"mimo-x-pro-preview", "mimo-x-flash-preview"}
-TIMEOUT = 180.0
+# HTTP 读超时（秒）。上游可能长时间思考，不设过短；可用环境变量覆盖。
+TIMEOUT = float(os.getenv("MIMO_CLIENT_TIMEOUT", "600"))
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
@@ -93,15 +95,8 @@ class MimoClient:
         out = dict(body)
         model = out.get("model", "")
         out["model"] = upstream_model_name(model)
-        if is_preview_model(model):
-            if out.get("thinking") is None:
-                out["thinking"] = {"type": "enabled"}
-            if out.get("temperature") is None:
-                out["temperature"] = 1.0
-            if out.get("top_p") is None:
-                out["top_p"] = 0.95
-            # 不猜 max_tokens：上游语义未知（可能是 reasoning + 正文的合计预算），
-            # 代理层填默认值容易让思考链吃光预算导致正文为空。未显式指定时透传。
+        # 代理层不注入任何默认阈值（thinking/temperature/top_p/max_tokens），
+        # 完全透传给上游，由上游/模型自行决定。
         return out
 
     async def chat_completion(
