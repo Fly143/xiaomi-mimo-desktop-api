@@ -1,6 +1,6 @@
-﻿"""Xiaomi MiMo Desktop API 鈥?涓诲叆鍙?
+"""Xiaomi MiMo Desktop API — 主入口
 
-灏嗗皬绫?MiMo Desktop 璐﹀彿浼氳瘽杞崲涓?OpenAI + Anthropic 鍏煎 API銆?
+将小米 MiMo Desktop 账号会话转换为 OpenAI + Anthropic 兼容 API。
 """
 
 import os
@@ -18,7 +18,7 @@ from app.batch import init_batch_storage as init_anthropic_batches
 
 app = FastAPI(
     title="Xiaomi MiMo Desktop API",
-    description="MiMo Desktop session 鈫?OpenAI + Anthropic API (Chat / Responses / Anthropic Messages)",
+    description="MiMo Desktop session → OpenAI + Anthropic API (Chat / Responses / Anthropic Messages)",
     version="1.1.2",
 )
 
@@ -36,9 +36,9 @@ async def startup_discover_models():
     init_anthropic_batches(str(Path(__file__).parent / ".anthropic_batches"))
     try:
         await _do_discover()
-        print("妯″瀷棰勬帰娴嬪畬鎴?)
+        print("模型预探测完成")
     except Exception as e:
-        print(f"妯″瀷棰勬帰娴嬪け璐ワ紙涓嶅奖鍝嶆湇鍔★級: {e}")
+        print(f"模型预探测失败（不影响服务）: {e}")
 
 
 
@@ -58,14 +58,14 @@ def main():
 
     print(f"""
 Xiaomi MiMo Desktop API
-  鍦板潃: http://{host}:{port}
-  绠＄悊: http://{host}:{port}
+  地址: http://{host}:{port}
+  管理: http://{host}:{port}
   API:  http://{host}:{port}/v1/chat/completions
-  鏂囨。: http://{host}:{port}/docs
+  文档: http://{host}:{port}/docs
 
-  API Keys: {len(config_manager.config.api_keys.split(','))} 涓?
-  Desktop 璐﹀彿: {len(config_manager.config.mimo_accounts)} 涓?
-  妯″瀷: mimo-x-pro-preview / mimo-x-flash-preview
+  API Keys: {len(config_manager.config.api_keys.split(','))} 个
+  Desktop 账号: {len(config_manager.config.mimo_accounts)} 个
+  模型: mimo-x-pro-preview / mimo-x-flash-preview
 """)
 
     uvicorn.run(app, host=host, port=port, log_level="info")
