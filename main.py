@@ -19,7 +19,7 @@ from app.batch import init_batch_storage as init_anthropic_batches
 app = FastAPI(
     title="Xiaomi MiMo Desktop API",
     description="MiMo Desktop session → OpenAI + Anthropic API (Chat / Responses / Anthropic Messages)",
-    version="1.1.2",
+    version="1.1.3",
 )
 
 app.add_middleware(

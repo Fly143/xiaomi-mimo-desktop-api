@@ -25,8 +25,10 @@ from .desktop_session import (
 
 # Desktop 独占模型需要 xiaomi/ 前缀
 PREVIEW_MODELS = {"mimo-x-pro-preview", "mimo-x-flash-preview"}
-# HTTP 读超时（秒）。上游可能长时间思考，不设过短；可用环境变量覆盖。
-TIMEOUT = float(os.getenv("MIMO_CLIENT_TIMEOUT", "600"))
+# HTTP 读超时（秒）。默认 0 = 不限：思考+输出整条流纯透传，不设代理侧时限。
+# 需要保护时显式设 MIMO_CLIENT_TIMEOUT=600 等。
+_t = float(os.getenv("MIMO_CLIENT_TIMEOUT", "0") or "0")
+TIMEOUT = None if _t <= 0 else _t
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
