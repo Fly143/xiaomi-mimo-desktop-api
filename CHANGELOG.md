@@ -2,6 +2,12 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.1.2] — 2026-09-12
+
+### 变更
+- **代理层不再注入** `thinking` / `temperature` / `top_p` 默认值，完全透传上游
+- **HTTP 超时默认 600s** — 可用 `MIMO_CLIENT_TIMEOUT` 覆盖
+
 ## [v1.1.1] — 2026-09-11
 
 ### 变更
