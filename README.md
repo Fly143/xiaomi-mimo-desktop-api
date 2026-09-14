@@ -298,12 +298,46 @@ curl http://127.0.0.1:8080/v1/messages \
   }'
 ```
 
-Claude 模型名自动映射：
+### Anthropic 模型名映射
 
-| Anthropic 名 | Desktop 模型 |
-|--------------|--------------|
-| `claude-opus-4-6` / `claude-opus-4-1` / `claude-3-opus` 等 opus 级 | `mimo-x-pro-preview` |
-| `claude-sonnet-*` / `claude-haiku-*` 等 | `mimo-x-flash-preview` |
+Claude Code CLI / RikkaHub 等工具期望 Anthropic 风格模型名，无法直接使用 Desktop 原生 `mimo-x-*`。本代理在 `/v1/messages` 内部自动映射：
+
+| Claude 模型名 | → Desktop 模型 |
+|---|---|
+| `claude-opus-4-7` | `mimo-x-pro-preview` |
+| `claude-sonnet-4-7` | `mimo-x-flash-preview` |
+| `claude-haiku-4-7` | `mimo-x-flash-preview` |
+| `claude-opus-4-6` | `mimo-x-pro-preview` |
+| `claude-sonnet-4-6` | `mimo-x-flash-preview` |
+| `claude-haiku-4-6` | `mimo-x-flash-preview` |
+| `claude-opus-4-5` | `mimo-x-pro-preview` |
+| `claude-sonnet-4-5` | `mimo-x-flash-preview` |
+| `claude-haiku-4-5` | `mimo-x-flash-preview` |
+| `claude-opus-4-1` | `mimo-x-pro-preview` |
+| `claude-opus-4-0` | `mimo-x-pro-preview` |
+| `claude-sonnet-4-0` | `mimo-x-flash-preview` |
+| `claude-haiku-4-0` | `mimo-x-flash-preview` |
+| `claude-3-7-sonnet` | `mimo-x-flash-preview` |
+| `claude-3-5-sonnet` | `mimo-x-flash-preview` |
+| `claude-3-opus` | `mimo-x-pro-preview` |
+| `claude-3-sonnet` | `mimo-x-flash-preview` |
+| `claude-3-haiku` | `mimo-x-flash-preview` |
+| `claude-opus-4-7-search` / `claude-opus-4-6-search` | `mimo-x-pro-preview` |
+| `claude-sonnet-4-7-search` / `claude-sonnet-4-6-search` | `mimo-x-flash-preview` |
+| `claude-sonnet-4-7-nothinking` / `claude-sonnet-4-6-nothinking` | `mimo-x-flash-preview` |
+| `claude-haiku-4-5-nothinking` | `mimo-x-flash-preview` |
+| `claude-sonnet-4-7-thinking` | `mimo-x-flash-preview` |
+| `claude-opus-4-7-thinking` | `mimo-x-pro-preview` |
+
+匹配规则（与 `_resolve_anthropic_model` 一致）：
+
+1. `mimo-*` 原样透传  
+2. 表内精确匹配  
+3. 去掉日期后缀 `-YYYYMMDD` / `-YYYY-MM-DD` 再匹配  
+4. 去掉 `-latest` / `@latest` 再匹配  
+5. 未知 `claude-*`：含 `opus` → `mimo-x-pro-preview`，否则 → `mimo-x-flash-preview`
+
+`/v1/models` 仍只返回 Desktop 原生 `mimo-x-pro-preview` / `mimo-x-flash-preview`，不影响其他客户端。
 
 支持端点：`/v1/messages`、`/v1/messages/count_tokens`、`/v1/messages/batches*` 等。
 

@@ -51,7 +51,15 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"mimo-x-pro-preview","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-Claude aliases: opus-class → `mimo-x-pro-preview`, sonnet/haiku → `mimo-x-flash-preview`.
+Claude aliases on `/v1/messages` (see `ANTHROPIC_MODEL_ALIASES`):
+
+| Claude name | → Desktop model |
+|---|---|
+| `claude-opus-4-7` / `4-6` / `4-5` / `4-1` / `4-0` / `claude-3-opus` | `mimo-x-pro-preview` |
+| `claude-sonnet-*` / `claude-haiku-*` / `claude-3-*-sonnet` / `claude-3-haiku` | `mimo-x-flash-preview` |
+| `*-search` / `*-thinking` / `*-nothinking` variants | same tier as base name |
+
+Also strips `-YYYYMMDD` / `-YYYY-MM-DD` / `-latest` before lookup; unknown `claude-*`: `opus` → pro, else flash. Native `mimo-x-*` names pass through unchanged.
 
 ## Environment
 
