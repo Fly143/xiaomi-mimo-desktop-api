@@ -63,7 +63,7 @@ def validate_api_key(authorization: Optional[str]) -> bool:
     return config_manager.validate_api_key(key)
 
 
-# Desktop 通路仅这两个独占模型
+# 动态发现失败时的回退列表（Desktop 实测可用 TEXT 模型）
 DESKTOP_MODELS = ["mimo-x-pro-preview", "mimo-x-flash-preview"]
 
 
@@ -75,11 +75,17 @@ def _append_extra_models(models: list) -> list:
 
 
 async def _do_discover() -> list:
-    """Desktop /api/route 无公开 models 列表，使用内置 Preview 模型。"""
+    """动态发现：GET /api/model/list → data.models[].modelName（全量，不过滤）。"""
     global _models_cache
-    models = list(DESKTOP_MODELS)
+    account = config_manager.get_next_account()
+    if not account:
+        models = list(DESKTOP_MODELS)
+    else:
+        from app.mimo_client import MimoClient
+        models = await MimoClient(account).list_models()
     async with _models_lock:
         _models_cache = models
+    print(f"[模型发现] 找到 {len(models)} 个模型: {models}")
     return models
 
 

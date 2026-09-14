@@ -165,8 +165,35 @@ class MimoClient:
             await client.aclose()
 
     async def list_models(self) -> list[str]:
-        """Desktop 会话没有公开 models 列表接口时返回内置列表。"""
-        return list(BUILTIN_MODELS)
+        """动态拉取 Desktop 模型清单：GET /api/model/list，不过滤类型。
+
+        返回 data.models[].modelName 全量列表；失败时回退内置 Preview。
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                cookie = await get_service_cookie(self._credentials(), client)
+                if not cookie:
+                    return list(BUILTIN_MODELS)
+                r = await client.get(
+                    f"{API_BASE}/api/model/list",
+                    headers={
+                        "User-Agent": API_UA,
+                        "Cookie": cookie,
+                        "Accept": "application/json",
+                    },
+                )
+                if r.status_code != 200:
+                    return list(BUILTIN_MODELS)
+                data = r.json()
+                models = []
+                for m in (data.get("data") or {}).get("models") or []:
+                    name = (m or {}).get("modelName") or ""
+                    if name and name not in models:
+                        models.append(name)
+                return models or list(BUILTIN_MODELS)
+        except Exception as e:
+            print(f"[模型发现] /api/model/list 失败: {e}")
+            return list(BUILTIN_MODELS)
 
     async def test_connection(self) -> Tuple[bool, str]:
         """探活：先取 session cookie，再打最小请求。"""
