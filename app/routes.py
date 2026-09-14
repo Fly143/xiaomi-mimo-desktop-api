@@ -343,6 +343,17 @@ def _merge_question_visibility(content: str | None, tool_calls: list | None) -> 
     return base + "\n\n" + qtext
 
 
+def _question_only_tool_calls(tool_calls: list | None) -> bool:
+    """是否仅为 Desktop question 工具（无其它业务工具）。"""
+    names = set()
+    for tc in tool_calls or []:
+        fn = (tc or {}).get("function") or {}
+        name = (fn.get("name") or "").strip().lower()
+        if name:
+            names.add(name)
+    return bool(names) and names == {"question"}
+
+
 def _build_response(
     msg_id: str, model: str,
     content: str = None, tool_calls: list = None,
@@ -574,8 +585,16 @@ async def chat_completions(
         content = _strip_tool_name_prefix(content, tool_names)
 
         if tool_calls:
-            # question 工具：选项必须进 content，否则普通客户端看不见
+            # Desktop question 工具：RikkaHub 等客户端有 tool_calls 时常忽略/不渲染正文，
+            # 且不认 question 卡片 → 仅 question 时降级为纯文本选项 + finish_reason=stop。
             visible = _merge_question_visibility(content, tool_calls)
+            if _question_only_tool_calls(tool_calls):
+                return _build_response(
+                    msg_id, request.model,
+                    content=visible, tool_calls=None,
+                    reasoning=think_content,
+                    finish_reason="stop", usage=usage
+                )
             return _build_response(
                 msg_id, request.model,
                 content=visible, tool_calls=tool_calls,
@@ -727,8 +746,16 @@ async def _stream_response(
                 yield _build_chunk(msg_id, model, created=created_t, reasoning=buffer)
 
             if collected_tool_calls:
-                # question 等 Desktop 特殊工具：先把选项物化到 content 再发 tool_calls
                 visible = _merge_question_visibility("".join(content_buffer_chunks), collected_tool_calls)
+                # 仅 question：当普通正文流给 RikkaHub 等客户端，避免 tool_calls 面板吞掉选项
+                if _question_only_tool_calls(collected_tool_calls):
+                    if visible:
+                        yield _build_chunk(msg_id, model, created=created_t, content=visible)
+                    yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+                    yield "data: [DONE]\n\n"
+                    if last_usage:
+                        _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
+                    return
                 if visible:
                     yield _build_chunk(msg_id, model, created=created_t, content=visible)
                 # 原生 tool_calls 直接输出（OpenAI 标准格式，附 index）
