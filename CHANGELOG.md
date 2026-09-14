@@ -2,6 +2,13 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.1.4.1] — 2026-09-14
+
+### 变更
+- **移除模型发现硬编码回退** — 发现失败返回空列表，不再灌入 `mimo-x-*-preview`
+- 删除未使用的 `DESKTOP_MODELS` / `BUILTIN_MODELS`
+- `config.models` 手动列表仍可覆盖发现结果
+
 ## [v1.1.4] — 2026-09-14
 
 ### 新增
