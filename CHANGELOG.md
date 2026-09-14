@@ -2,12 +2,13 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
-## [Unreleased]
+## [v1.1.5] — 2026-09-14
 
 ### 新增
 - **`POST /v1/images/generations`** — 代理 Desktop `/api/route/images/generations`（上游实测 `doubao-seedream-5-0-pro`）
 - 透传 `prompt` / `model` / `size` / `quality` / `output_format` / `background` / `watermark`；`response_format=url|b64_json`
 - 不传 model 时由上游决定；本机不注入默认生图模型
+- README 补充生图说明；模型列表说明改为动态目录
 
 ## [v1.1.4.1] — 2026-09-14
 
