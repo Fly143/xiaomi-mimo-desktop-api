@@ -480,6 +480,19 @@ def _desktop_question_tool() -> dict:
     }
 
 
+def _client_has_ask_user_only(tools_dict: list | None) -> bool:
+    """客户端只声明了 ask_user、未声明 question（RikkaHub 场景）。"""
+    if not tools_dict:
+        return False
+    names = set()
+    for t in tools_dict:
+        fn = (t or {}).get("function") or {}
+        n = (fn.get("name") or t.get("name") or "").lower()
+        if n:
+            names.add(n)
+    return "ask_user" in names and "question" not in names
+
+
 def _ensure_desktop_question_tool(tools_dict: list | None) -> list | None:
     """客户端带 RikkaHub `ask_user` 时，向 Desktop 补注入 `question`。
 
@@ -615,7 +628,8 @@ async def chat_completions(
 
     # 转换 tools 为字典列表
     tools_dict = [t.dict() if hasattr(t, 'dict') else t for t in request.tools] if request.tools else None
-    # RikkaHub ask_user → 向 Desktop 补 question，保证交互提问能触发
+    # 仅客户端是 RikkaHub 式 ask_user 时，才向 Desktop 注入 question，且响应改写回 ask_user
+    prefer_ask_user = _client_has_ask_user_only(tools_dict)
     tools_dict = _ensure_desktop_question_tool(tools_dict)
 
     # 提取媒体和文本文件
@@ -682,7 +696,8 @@ async def chat_completions(
                              raw_messages=request.messages if needs_compression else None,
                              raw_tools=tools_dict if needs_compression else None,
                              raw_passthrough=passthrough_mode if needs_compression else None,
-                             effective_model=effective_model),
+                             effective_model=effective_model,
+                             prefer_ask_user=prefer_ask_user),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -733,20 +748,9 @@ async def chat_completions(
         content = _strip_tool_name_prefix(content, tool_names)
 
         if tool_calls:
-            # Desktop question → RikkaHub ask_user，让客户端弹出可点选卡片；
-            # content 里同步物化选项，兼容不渲染 tool 卡片的客户端。
+            # content 物化选项；question→ask_user 仅在客户端是 RikkaHub 时做
             visible = _merge_question_visibility(content, tool_calls)
-            out_calls = tool_calls
-            if _question_only_tool_calls(tool_calls):
-                out_calls = _rewrite_question_to_ask_user(tool_calls)
-                return _build_response(
-                    msg_id, request.model,
-                    content=visible, tool_calls=out_calls,
-                    reasoning=think_content,
-                    finish_reason="tool_calls", usage=usage
-                )
-            # 混合工具：question 部分也改写成 ask_user，其它原样
-            out_calls = _rewrite_question_to_ask_user(tool_calls)
+            out_calls = _rewrite_question_to_ask_user(tool_calls) if prefer_ask_user else tool_calls
             return _build_response(
                 msg_id, request.model,
                 content=visible, tool_calls=out_calls,
@@ -781,6 +785,7 @@ async def _stream_response(
     raw_tools: list = None,
     raw_passthrough: bool = False,
     effective_model: str = None,
+    prefer_ask_user: bool = False,
 ):
     """流式响应生成器。
 
@@ -899,7 +904,10 @@ async def _stream_response(
 
             if collected_tool_calls:
                 visible = _merge_question_visibility("".join(content_buffer_chunks), collected_tool_calls)
-                out_calls = _rewrite_question_to_ask_user(collected_tool_calls)
+                out_calls = (
+                    _rewrite_question_to_ask_user(collected_tool_calls)
+                    if prefer_ask_user else collected_tool_calls
+                )
                 if visible:
                     yield _build_chunk(msg_id, model, created=created_t, content=visible)
                 streaming_tc = [{**tc, "index": i} for i, tc in enumerate(out_calls)]
