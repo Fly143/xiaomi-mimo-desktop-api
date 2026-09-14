@@ -2,6 +2,16 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.1.4] — 2026-09-14
+
+### 新增
+- **全量动态模型发现** — 调用 Desktop `GET /api/model/list`，返回 `modelName` 全量目录（不按 TEXT 过滤）
+- 发现失败时回退内置 Preview：`mimo-x-pro-preview` / `mimo-x-flash-preview`
+
+### 说明
+- 目录含 TEXT / TTS / ASR / 绘图等类型；能否 chat 由上游白名单决定（实测 TEXT 可用仍是两个 preview）
+- 上游另有别名 `mimo-pro` / `mimo-flash` 会落到 preview；`mimo-auto` 不在对外 chat 白名单
+
 ## [v1.1.3] — 2026-09-12
 
 ### 变更
