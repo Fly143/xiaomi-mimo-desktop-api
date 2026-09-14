@@ -540,8 +540,10 @@ async def anthropic_messages(
             _, msgs_as_objects = await compress_messages(msgs_as_objects, model, client)
         else:
             msgs_as_objects = truncate_messages(msgs_as_objects)
+    # Desktop 原生 tool_calls：query 不塞 MiMoML 说明书（与 chat 路径 tools_passthrough 一致）
+    passthrough_mode = config_manager.config.tools_passthrough
     query = build_query_from_messages(
-        msgs_as_objects, tools=tools_dict
+        msgs_as_objects, tools=tools_dict, passthrough=passthrough_mode
     )
 
     # ── 工具名（用于后续提取） ──
