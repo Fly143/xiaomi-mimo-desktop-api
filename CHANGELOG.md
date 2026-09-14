@@ -2,6 +2,12 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.1.5.1] — 2026-09-14
+
+### 变更
+- **`reasoning_effort` 纯透传** — 客户端传 `low`/`medium`/`high` 原样下传，不再写死
+- 仅 `thinking=true` 且无档位时默认 `high`（与 WorkBuddy / MiMo2API 策略对齐）
+
 ## [v1.1.5] — 2026-09-14
 
 ### 新增
