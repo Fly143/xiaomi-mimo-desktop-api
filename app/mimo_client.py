@@ -297,6 +297,7 @@ class MimoClient:
         attachments: list | None = None,
         tools: list | None = None,
         stream: bool = False,
+        reasoning_effort: str | None = None,
     ) -> dict:
         parts: list = [{"type": "text", "text": query}]
         for m in multi_medias or []:
@@ -309,7 +310,11 @@ class MimoClient:
             "messages": [{"role": "user", "content": content}],
             "stream": stream,
         }
-        if thinking:
+        # 思考强度：显式透传 reasoning_effort（low/medium/high）；
+        # 仅 thinking=True 且未给档位时才默认 high（兼容旧调用）。
+        if reasoning_effort:
+            body["reasoning_effort"] = reasoning_effort
+        elif thinking:
             body["reasoning_effort"] = "high"
         # Desktop OpenAI 兼容：传原生 tools，优先返回结构化 tool_calls
         norm_tools = self._normalize_tools(tools)
@@ -361,9 +366,12 @@ class MimoClient:
     async def call_api(
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
-        tools: list | None = None,
+        tools: list | None = None, reasoning_effort: str | None = None,
     ) -> Tuple[str, str, dict, list, list]:
-        body = self._query_body(query, thinking, model, multi_medias, attachments, tools=tools)
+        body = self._query_body(
+            query, thinking, model, multi_medias, attachments,
+            tools=tools, reasoning_effort=reasoning_effort,
+        )
         data = await self.chat_completion_json(body)
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
@@ -388,9 +396,12 @@ class MimoClient:
     async def stream_api(
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
-        tools: list | None = None,
+        tools: list | None = None, reasoning_effort: str | None = None,
     ) -> AsyncIterator[dict]:
-        body = self._query_body(query, thinking, model, multi_medias, attachments, tools=tools, stream=True)
+        body = self._query_body(
+            query, thinking, model, multi_medias, attachments,
+            tools=tools, stream=True, reasoning_effort=reasoning_effort,
+        )
         body["stream_options"] = {"include_usage": True}
         client = httpx.AsyncClient(timeout=TIMEOUT)
         tc_acc: dict = {}
