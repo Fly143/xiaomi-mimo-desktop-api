@@ -177,6 +177,75 @@ async def get_model(
     raise HTTPException(status_code=404, detail={"error": {"message": f"Model {model_id} not found"}})
 
 
+@router.post("/v1/images/generations")
+async def images_generations(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+):
+    """OpenAI 风格生图 → Desktop `/api/route/images/generations`（上游豆包 Seedream）。
+
+    请求体：prompt 必填；可选 model / size / quality / output_format / background / watermark。
+    不指定 model 时由上游决定（实测为 doubao-seedream-5-0-pro）。
+    response_format 支持 url（默认）与 b64_json。
+    """
+    api_key = authorization or (f"Bearer {x_api_key}" if x_api_key else None)
+    if not validate_api_key(api_key):
+        raise HTTPException(status_code=401, detail={"error": {"message": "invalid api key"}})
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail={"error": {"message": "invalid JSON body"}})
+    if not (body.get("prompt") or "").strip():
+        raise HTTPException(status_code=400, detail={"error": {"message": "prompt is required"}})
+
+    account = config_manager.get_next_account()
+    if not account:
+        raise HTTPException(status_code=503, detail={"error": {"message": "no mimo account"}})
+
+    try:
+        data = await MimoClient(account).image_generation(body)
+    except MimoApiError as e:
+        raise HTTPException(status_code=e.status_code, detail={"error": {"message": f"MiMo API: {e.response_body[:300]}"}})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": {"message": str(e)}})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail={"error": {"message": str(e)}})
+
+    # OpenAI images 兼容：把上游 {model, data:[{url|b64_json,...}]} 规整
+    response_format = (body.get("response_format") or "url").lower()
+    items = []
+    for item in (data.get("data") or [])[: max(1, int(body.get("n") or 1))]:
+        entry: dict = {}
+        if item.get("b64_json"):
+            entry["b64_json"] = item["b64_json"]
+        elif item.get("url"):
+            entry["url"] = item["url"]
+        for k in ("size", "output_format"):
+            if item.get(k):
+                entry[k] = item[k]
+        if response_format == "b64_json" and not entry.get("b64_json") and entry.get("url"):
+            try:
+                async with httpx.AsyncClient(timeout=120) as ac:
+                    img = await ac.get(entry["url"])
+                    if img.status_code == 200:
+                        import base64
+                        converted = {"b64_json": base64.b64encode(img.content).decode("ascii")}
+                        if entry.get("size"):
+                            converted["size"] = entry["size"]
+                        entry = converted
+            except Exception:
+                pass
+        items.append(entry)
+
+    return JSONResponse(content={
+        "created": int(data.get("created") or time.time()),
+        "data": items,
+        "model": data.get("model"),
+        "usage": data.get("usage"),
+    })
+
+
 # ─── 文本清洗辅助函数 ────────────────────────────────────────
 
 def _strip_tool_result_blocks(text: str) -> str:

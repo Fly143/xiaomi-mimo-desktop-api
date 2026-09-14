@@ -1,10 +1,10 @@
 """MiMo Desktop 会话客户端
 
-唯一上游：mimo-server /api/route/chat/completions
-鉴权：passToken → SSO → serviceToken cookie（见 desktop_session.py）
+上游：
+- 聊天：mimo-server /api/route/chat/completions
+- 生图：mimo-server /api/route/images/generations
 
-不代理 api.xiaomimimo.com 官方 OpenAI API。
-上游返回 OpenAI 兼容 JSON/SSE，本层只做鉴权、模型名映射、错误与 401 重试。
+鉴权：passToken → SSO → serviceToken cookie（见 desktop_session.py）
 """
 
 from __future__ import annotations
@@ -87,12 +87,31 @@ class MimoClient:
     def _url(self) -> str:
         return f"{API_BASE}/api/route/chat/completions"
 
+    def _images_url(self) -> str:
+        return f"{API_BASE}/api/route/images/generations"
+
     def _prepare_body(self, body: dict) -> dict:
         out = dict(body)
         model = out.get("model", "")
         out["model"] = upstream_model_name(model)
         # 代理层不注入任何默认阈值（thinking/temperature/top_p/max_tokens），
         # 完全透传给上游，由上游/模型自行决定。
+        return out
+
+    def _prepare_image_body(self, body: dict) -> dict:
+        """生图请求体：透传 prompt 与可选字段，不注入默认 model。"""
+        out: dict = {}
+        prompt = (body.get("prompt") or "").strip()
+        if not prompt:
+            raise ValueError("prompt is required")
+        out["prompt"] = prompt
+        # Desktop 默认 watermark:false；若客户端显式传了则覆盖
+        out["watermark"] = bool(body.get("watermark", False))
+        for key in ("model", "size", "quality", "output_format", "background"):
+            if body.get(key) is not None:
+                out[key] = body[key]
+        if "model" in out and out["model"]:
+            out["model"] = upstream_model_name(out["model"])
         return out
 
     async def chat_completion(
@@ -157,6 +176,23 @@ class MimoClient:
                 yield chunk
         finally:
             await client.aclose()
+
+    async def image_generation(self, body: dict) -> dict:
+        """POST /api/route/images/generations（上游为豆包 Seedream 等）。"""
+        payload = self._prepare_image_body(body)
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            headers = await self._headers(False, client)
+            headers["Accept"] = "application/json"
+            headers["X-Mimo-Source"] = "mimocode-desktop"
+            response = await client.request(
+                "POST",
+                self._images_url(),
+                headers=headers,
+                json=payload,
+            )
+            if response.status_code >= 400:
+                raise MimoApiError(response.status_code, response.text)
+            return response.json()
 
     async def list_models(self) -> list[str]:
         """动态拉取 Desktop 模型清单：GET /api/model/list。

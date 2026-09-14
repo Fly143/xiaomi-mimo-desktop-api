@@ -206,12 +206,14 @@ curl http://127.0.0.1:8080/v1/models \
   -H "Authorization: Bearer sk-mimo"
 ```
 
-Desktop 通路固定返回：
+Desktop 通路动态拉取 `/api/model/list`（约 7 项）：
 
-| 模型 ID | 说明 |
+| 模型 ID | 类型 |
 |---------|------|
-| `mimo-x-pro-preview` | Desktop 独占 Pro Preview |
-| `mimo-x-flash-preview` | Desktop 独占 Flash Preview |
+| `mimo-x-pro-preview` / `mimo-x-flash-preview` | TEXT（chat） |
+| `Doubao-Seedream-5.0-pro` | 生图（Seedream） |
+| `mimo-v2.5-tts` 等 | TTS |
+| `mimo-v2.5-asr` | ASR |
 
 ### 2. 文本对话
 
@@ -243,6 +245,23 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ```
 
 返回标准 SSE 流（`data: ...\n\n`），以 `data: [DONE]\n\n` 结束。
+
+### 3.1 生图（豆包 Seedream）
+
+上游：`POST /api/route/images/generations`（实测模型 `doubao-seedream-5-0-pro`）。
+
+```bash
+curl http://127.0.0.1:8080/v1/images/generations \
+  -H "Authorization: Bearer sk-mimo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "一只简笔画小猫，白底",
+    "size": "1536x1536"
+  }'
+```
+
+可选字段：`model`（如 `Doubao-Seedream-5.0-pro`）、`size`、`quality`、`output_format`、`background`、`watermark`、`response_format`（`url` / `b64_json`）。  
+不传 `model` 时由上游决定。
 
 ### 4. 工具调用（Function Calling）
 
