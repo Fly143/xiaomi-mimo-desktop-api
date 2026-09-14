@@ -2,6 +2,12 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.1.5.2] — 2026-09-14
+
+### 修复
+- **Anthropic / Responses / batch 路径补传 `tools_passthrough`** — 之前漏传导致默认 False，向 query 注入 MiMoML「TOOL CALL FORMAT」说明书；RikkaHub 走 `/v1/messages` 时会看到格式说明
+- Chat 路径原本已传；本轮补齐所有 `build_query_from_messages` 调用点
+
 ## [v1.1.5.1] — 2026-09-14
 
 ### 变更
