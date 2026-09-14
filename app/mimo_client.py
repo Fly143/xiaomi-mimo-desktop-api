@@ -32,12 +32,6 @@ TIMEOUT = None if _t <= 0 else _t
 THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
-BUILTIN_MODELS = [
-    "mimo-x-pro-preview",
-    "mimo-x-flash-preview",
-]
-
-
 class MimoApiError(Exception):
     def __init__(self, status_code: int, response_body: str):
         self.status_code = status_code
