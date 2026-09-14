@@ -63,23 +63,15 @@ def validate_api_key(authorization: Optional[str]) -> bool:
     return config_manager.validate_api_key(key)
 
 
-# 动态发现失败时的回退列表（Desktop 实测可用 TEXT 模型）
-DESKTOP_MODELS = ["mimo-x-pro-preview", "mimo-x-flash-preview"]
-
-
-def _append_extra_models(models: list) -> list:
-    for m in DESKTOP_MODELS:
-        if m not in models:
-            models.append(m)
-    return models
-
+# ─── 模型发现 ─────────────────────────────────────────────────
+# GET /api/model/list 全量；失败返回空（不做本地硬编码回退）。
 
 async def _do_discover() -> list:
-    """动态发现：GET /api/model/list → data.models[].modelName（全量，不过滤）。"""
+    """动态发现：GET /api/model/list → data.models[].modelName。"""
     global _models_cache
     account = config_manager.get_next_account()
     if not account:
-        models = list(DESKTOP_MODELS)
+        models = []
     else:
         from app.mimo_client import MimoClient
         models = await MimoClient(account).list_models()
@@ -91,16 +83,16 @@ async def _do_discover() -> list:
 
 async def discover_models() -> list:
     if config_manager.config.models:
-        return _append_extra_models(config_manager.config.models.copy())
+        return list(config_manager.config.models)
     return await _do_discover()
 
 
 def get_models_list() -> list:
     if config_manager.config.models:
-        return _append_extra_models(config_manager.config.models.copy())
+        return list(config_manager.config.models)
     if _models_cache is not None:
         return _models_cache
-    return list(DESKTOP_MODELS)
+    return []
 
 
 async def _background_refresh():
