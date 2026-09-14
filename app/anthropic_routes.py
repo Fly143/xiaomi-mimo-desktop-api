@@ -694,7 +694,9 @@ async def anthropic_create_batch_ep(request: Request):
         ob = _anthropic_convert_request(req.get("body", {}))
         msgs = ob.get("messages", [])
         msgs_objs = [OpenAIMessage(**m) if isinstance(m, dict) else m for m in msgs]
-        query = build_query_from_messages(msgs_objs)
+        query = build_query_from_messages(
+            msgs_objs, passthrough=config_manager.config.tools_passthrough
+        )
 
         account = config_manager.get_next_account()
         if not account:
