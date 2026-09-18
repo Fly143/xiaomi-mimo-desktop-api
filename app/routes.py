@@ -196,8 +196,30 @@ async def images_generations(
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail={"error": {"message": "invalid JSON body"}})
-    if not (body.get("prompt") or "").strip():
-        raise HTTPException(status_code=400, detail={"error": {"message": "prompt is required"}})
+
+    # 兼容 OpenAI 风格多字段：prompt / text / input / description
+    raw_prompt = body.get("prompt")
+    if not (isinstance(raw_prompt, str) and raw_prompt.strip()):
+        for alt in ("text", "input", "description"):
+            v = body.get(alt)
+            if isinstance(v, str) and v.strip():
+                body["prompt"] = v.strip()
+                break
+    prompt = body.get("prompt")
+    if isinstance(prompt, list):
+        texts = []
+        for p in prompt:
+            if isinstance(p, dict) and isinstance(p.get("text"), str):
+                texts.append(p["text"])
+            elif isinstance(p, str):
+                texts.append(p)
+        prompt = "\n".join(t for t in texts if t)
+        body["prompt"] = prompt
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"message": "prompt is required (field: prompt|text|input)"}},
+        )
 
     account = config_manager.get_next_account()
     if not account:
@@ -206,7 +228,10 @@ async def images_generations(
     try:
         data = await MimoClient(account).image_generation(body)
     except MimoApiError as e:
-        raise HTTPException(status_code=e.status_code, detail={"error": {"message": f"MiMo API: {e.response_body[:300]}"}})
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={"error": {"message": f"MiMo API: {e.response_body[:300]}"}},
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": {"message": str(e)}})
     except Exception as e:

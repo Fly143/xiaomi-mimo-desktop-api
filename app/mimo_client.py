@@ -101,15 +101,19 @@ class MimoClient:
     def _prepare_image_body(self, body: dict) -> dict:
         """生图请求体：透传 prompt 与可选字段，不注入默认 model。"""
         out: dict = {}
-        prompt = (body.get("prompt") or "").strip()
+        prompt = body.get("prompt")
+        if not isinstance(prompt, str):
+            prompt = ""
+        prompt = prompt.strip()
         if not prompt:
             raise ValueError("prompt is required")
         out["prompt"] = prompt
-        # Desktop 默认 watermark:false；若客户端显式传了则覆盖
         out["watermark"] = bool(body.get("watermark", False))
-        for key in ("model", "size", "quality", "output_format", "background"):
+        for key in ("model", "size", "quality", "output_format", "background", "n", "seed"):
             if body.get(key) is not None:
                 out[key] = body[key]
+        # 已知无效/客户端独有字段不透传，避免上游 400
+        # response_format 在本层处理，不发给上游
         if "model" in out and out["model"]:
             out["model"] = upstream_model_name(out["model"])
         return out
