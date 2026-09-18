@@ -112,6 +112,9 @@ class MimoClient:
         for key in ("model", "size", "quality", "output_format", "background", "n", "seed"):
             if body.get(key) is not None:
                 out[key] = body[key]
+        # 上游不认 size=auto / invalid size；auto 视为未指定，交给上游默认
+        if str(out.get("size", "")).lower() in ("auto", "auto_1", ""):
+            out.pop("size", None)
         # 已知无效/客户端独有字段不透传，避免上游 400
         # response_format 在本层处理，不发给上游
         if "model" in out and out["model"]:
