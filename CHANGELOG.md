@@ -2,6 +2,12 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.1.5.4] — 2026-09-18
+
+### 修复
+- **生图 `size=auto` 400** — 上游不认 `auto`，不再透传，改用上游默认尺寸
+- **生图字段兼容** — 支持 `text`/`input`/`description` 作 prompt，content parts；`n`/`seed` 透传
+
 ## [v1.1.5.3] — 2026-09-16
 
 ### 修复
