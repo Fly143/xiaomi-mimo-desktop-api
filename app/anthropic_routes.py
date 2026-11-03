@@ -302,6 +302,19 @@ async def _anthropic_stream_think_wrapper(
         if ev_type == "usage":
             api_usage = ev
             continue
+        if ev_type == "reasoning":
+            # 原生 reasoning：直接作为 thinking delta 下传，不裁剪空白
+            piece = ev.get("content") or ""
+            if piece:
+                if not st.any_think:
+                    idx = st.next_index
+                    st.next_index += 1
+                    st.think_index = idx
+                    st.think_active = True
+                    st.any_think = True
+                    yield _make_cb_start(idx, {"type": "thinking", "thinking": "", "signature": ""})
+                yield _make_thinking_delta(st.think_index, piece)
+            continue
         chunk = ev.get("content", "")
         if not chunk:
             continue
@@ -588,7 +601,7 @@ async def anthropic_messages(
         # 清理模型输出
         # 优先用上游原生 tool_calls；无原生时回退到文本解析
         tc_list = _normalize_native_tool_calls(native_tool_calls) if native_tool_calls else None
-        content = _strip_tool_result_blocks(content)
+        content = _strip_tool_result_blocks(content, strip=True)
 
         # 提取工具调用
         tool_calls = None
@@ -602,8 +615,8 @@ async def anthropic_messages(
                 if result[1] is not None:
                     content = result[1]  # 使用清理后的文本（含 MiMoML 残留清理）
 
-        content = _strip_tool_name_prefix(content, tool_names or [])
-        content = _strip_mimo_prefix(content)
+        content = _strip_tool_name_prefix(content, tool_names or [], strip=True)
+        content = _strip_mimo_prefix(content, strip=True)
 
         # 构建 OpenAI 格式的非流式响应
         message = {"role": "assistant", "content": content}

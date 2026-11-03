@@ -116,14 +116,20 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list, list]
 
 
 def _serialize_tool_calls(tool_calls: list) -> str:
-    """统一定义工具调用序列化 — 兼容 dict 和 pydantic model。"""
+    """统一定义工具调用序列化 — 兼容 dict 和 pydantic model。
+
+    注意：`_safe_nested_get(obj, *keys, default=...)` 的 *keys 是取值路径，
+    默认值必须用关键字传入。历史上写成 `_safe_nested_get(fn, "name", "")`
+    会让 "" 变成第二级取值键，结果恒为 None → 历史里的工具调用被序列化成
+    `TOOL_CALL: None(None)`，模型看不到自己调用过什么，于是无限重复同一次调用。
+    """
     tc_lines = []
     for tc in tool_calls:
         fn = _safe_nested_get(tc, "function")
         if not fn:
             continue
-        fname = _safe_nested_get(fn, "name", "")
-        args_str = _safe_nested_get(fn, "arguments", "{}")
+        fname = _safe_nested_get(fn, "name", default="") or ""
+        args_str = _safe_nested_get(fn, "arguments", default="{}")
 
         try:
             args = _json.loads(args_str) if isinstance(args_str, str) else args_str
@@ -441,8 +447,10 @@ def build_query_from_messages(
                     text_parts.append(item.get("text", ""))
             content = " ".join(text_parts)
 
-        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            content = _serialize_tool_calls(msg.tool_calls)
+        if getattr(msg, 'tool_calls', None):
+            # 保留助手正文（若有），再附工具调用；旧实现会直接用调用串覆盖正文
+            tc_text = _serialize_tool_calls(msg.tool_calls)
+            content = (content + "\n" + tc_text) if str(content).strip() else tc_text
 
         if role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '') or ''
@@ -549,8 +557,9 @@ def build_chunked_queries(
         if isinstance(content, list):
             text_parts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
             content = " ".join(text_parts)
-        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            content = _serialize_tool_calls(msg.tool_calls)
+        if getattr(msg, 'tool_calls', None):
+            tc_text = _serialize_tool_calls(msg.tool_calls)
+            content = (content + "\n" + tc_text) if str(content).strip() else tc_text
         if msg.role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '') or ''
             clean = __import__('re').sub(r'\[TOOL_RESULT\]\s*', '', content, flags=__import__('re').IGNORECASE).strip()

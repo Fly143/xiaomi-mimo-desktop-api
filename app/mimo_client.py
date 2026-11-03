@@ -332,28 +332,35 @@ class MimoClient:
 
     @staticmethod
     def _split_think_from_content(content: str) -> tuple[str, str]:
-        open_tag, close_tag = "<think>", "</think>"
-        if open_tag not in content:
+        """分离 <think> 块与正文。
+
+        逐位累积的旧实现会把 `</think>` 之前的整段正文（含 think 内部文本）
+        一起塞进 think，正文前言被吞掉。此处改为显式分段：正文/思考各自
+        按片段收集，支持多块与未闭合块。正文原样保留，不做 strip。
+        """
+        open_tag, close_tag = THINK_OPEN, THINK_CLOSE
+        if not content or open_tag not in content:
             return content, ""
-        main, think, in_think, buf, i = [], [], False, "", 0
-        while i < len(content):
-            if not in_think and content.startswith(open_tag, i):
-                in_think = True
-                i += len(open_tag)
-                continue
-            if in_think and content.startswith(close_tag, i):
-                in_think = False
-                think.append(buf)
-                buf = ""
-                i += len(close_tag)
-                continue
-            buf += content[i]
-            i += 1
-        if in_think:
-            think.append(buf)
-        else:
-            main.append(buf)
-        return "".join(main), "\n".join(think)
+
+        main_parts: list[str] = []
+        think_parts: list[str] = []
+        rest = content
+        while True:
+            i = rest.find(open_tag)
+            if i == -1:
+                main_parts.append(rest)
+                break
+            main_parts.append(rest[:i])
+            rest = rest[i + len(open_tag):]
+            j = rest.find(close_tag)
+            if j == -1:
+                # 未闭合：剩余全部算思考
+                think_parts.append(rest)
+                break
+            think_parts.append(rest[:j])
+            rest = rest[j + len(close_tag):]
+        think = "\n".join(p for p in think_parts if p.strip())
+        return "".join(main_parts), think
 
     @staticmethod
     def _merge_stream_tool_calls(acc: dict, deltas: list) -> list:
@@ -443,8 +450,10 @@ class MimoClient:
                         yield {"type": "text", "content": delta["content"]}
                     reasoning = delta.get("reasoning_content") or delta.get("reasoning") or ""
                     if reasoning:
-                        # 包成 think 块，routes 既有 THINK_OPEN/CLOSE 逻辑可直接处理
-                        yield {"type": "text", "content": THINK_OPEN + reasoning + THINK_CLOSE}
+                        # 原生 reasoning 作为独立事件下传，不再包成 <think> 文本再回炉解析：
+                        # 回合制包装会让「推理文本里出现 think 标签/正文标签解析」互相污染，
+                        # 导致思考内容被当成正文输出。下游按 ev_type 直接分流，零歧义。
+                        yield {"type": "reasoning", "content": reasoning}
                     if delta.get("tool_calls"):
                         # 仅累积，不 yield 文本（避免被 StreamSieve 当成 MiMoML 标记误解析）
                         self._merge_stream_tool_calls(tc_acc, delta["tool_calls"])
