@@ -52,10 +52,12 @@ class OpenAIChoice(BaseModel):
 
 
 class OpenAIUsage(BaseModel):
-    """OpenAI使用统计"""
+    """OpenAI使用统计（含缓存 / 推理明细）"""
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    prompt_tokens_details: Optional[Dict[str, Any]] = None
+    completion_tokens_details: Optional[Dict[str, Any]] = None
 
 
 class OpenAIResponse(BaseModel):

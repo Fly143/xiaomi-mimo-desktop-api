@@ -6,6 +6,7 @@
 
 ### 修复
 - **流式正文丢换行与空格** — 清理函数对每个分块都 `strip()`，纯空白分块（`" "` / `"\n"` / 缩进）被裁成空串后丢弃，正文挤成一段（`if a < b and c > d:` → `ifa< bandc>d:`）。`_clean_response_text` 增加 `strip` 开关，流式统一走空白保真的 `_clean_stream_text`
+- **用量明细丢失（缓存命中 / 推理 token 未上报）** — 上游 `usage` 里带 `prompt_tokens_details.cached_tokens` 与 `completion_tokens_details.reasoning_tokens`（实测长前缀第二轮起缓存命中 2048~2304 tokens），代理此前只转发 `prompt_tokens`，客户端把全部输入都算成「新读」，缓存命中率恒为 0。现在两项明细随 usage 一起下发（流式收尾块与非流式响应）
 - **流式响应从不发 usage** — OpenAI 兼容客户端从收尾的 `choices: []` + `usage` 块读会话 token 数；现在在 `finish_reason` 块之后、`[DONE]` 之前补发（工具调用路径同样补发），上游未给 usage 时按字符数估算兜底
 - **思考内容被当作正文输出** — reasoning 不再包成 `<think>…</think>` 文本回炉解析，改为独立事件直通 `reasoning` / `reasoning_content`；非流式不再把思考拼进 `content`；正文统一剥离残留 think 标签
 - **`_split_think_from_content` 吞掉正文前言** — 旧实现把 `</think>` 之前的正文并入思考，改为分段解析（支持多块与未闭合块，正文原样保留）

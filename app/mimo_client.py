@@ -443,6 +443,10 @@ class MimoClient:
         return content, think, {
             "promptTokens": usage.get("prompt_tokens") or 0,
             "completionTokens": usage.get("completion_tokens") or 0,
+            "totalTokens": usage.get("total_tokens")
+            or (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0),
+            "cachedTokens": (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0,
+            "reasoningTokens": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0,
         }, [], native_tool_calls
 
     async def stream_api(
@@ -483,6 +487,10 @@ class MimoClient:
                         "type": "usage",
                         "promptTokens": u.get("prompt_tokens") or 0,
                         "completionTokens": u.get("completion_tokens") or 0,
+                        "totalTokens": u.get("total_tokens")
+                        or (u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0),
+                        "cachedTokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0,
+                        "reasoningTokens": (u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0,
                     }
                 for choice in chunk.get("choices") or []:
                     delta = choice.get("delta") or {}

@@ -178,3 +178,22 @@ class StructuredSwitchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsageDetailTests(unittest.TestCase):
+    def test_cache_and_reasoning_details_are_forwarded(self):
+        raw = _build_usage_chunk(
+            "chatcmpl-x", "mimo",
+            {"promptTokens": 2562, "completionTokens": 98,
+             "cachedTokens": 2048, "reasoningTokens": 39},
+        )
+        usage = json.loads(raw[len("data: "):].strip())["usage"]
+        self.assertEqual(usage["prompt_tokens_details"], {"cached_tokens": 2048})
+        self.assertEqual(usage["completion_tokens_details"], {"reasoning_tokens": 39})
+
+    def test_details_omitted_when_zero(self):
+        raw = _build_usage_chunk("chatcmpl-x", "mimo",
+                                 {"promptTokens": 10, "completionTokens": 2})
+        usage = json.loads(raw[len("data: "):].strip())["usage"]
+        self.assertNotIn("prompt_tokens_details", usage)
+        self.assertNotIn("completion_tokens_details", usage)

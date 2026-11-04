@@ -649,7 +649,15 @@ def _build_response(
         usage_obj = OpenAIUsage(
             prompt_tokens=usage.get("promptTokens", 0),
             completion_tokens=usage.get("completionTokens", 0),
-            total_tokens=usage.get("promptTokens", 0) + usage.get("completionTokens", 0)
+            total_tokens=usage.get("promptTokens", 0) + usage.get("completionTokens", 0),
+            prompt_tokens_details=(
+                {"cached_tokens": int(usage.get("cachedTokens", 0) or 0)}
+                if usage.get("cachedTokens") else None
+            ),
+            completion_tokens_details=(
+                {"reasoning_tokens": int(usage.get("reasoningTokens", 0) or 0)}
+                if usage.get("reasoningTokens") else None
+            ),
         )
     return OpenAIResponse(
         id=msg_id, object="chat.completion",
@@ -770,6 +778,13 @@ def _build_usage_chunk(
             "total_tokens": prompt_tokens + completion_tokens,
         },
     }
+    # 缓存命中 / 推理 token 明细：客户端据此算「真正新读的输入」与缓存命中率
+    cached_tokens = int(usage.get("cachedTokens", 0) or 0)
+    reasoning_tokens = int(usage.get("reasoningTokens", 0) or 0)
+    if cached_tokens:
+        payload["usage"]["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+    if reasoning_tokens:
+        payload["usage"]["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
     return f"data: {json.dumps(payload)}\n\n"
 
 
