@@ -116,14 +116,20 @@ def extract_medias_from_messages(messages: list) -> Tuple[str, list, list, list]
 
 
 def _serialize_tool_calls(tool_calls: list) -> str:
-    """统一定义工具调用序列化 — 兼容 dict 和 pydantic model。"""
+    """统一定义工具调用序列化 — 兼容 dict 和 pydantic model。
+
+    注意：`_safe_nested_get(obj, *keys, default=...)` 的 *keys 是取值路径，
+    默认值必须用关键字传入。历史上写成 `_safe_nested_get(fn, "name", "")`
+    会让 "" 变成第二级取值键，结果恒为 None → 历史里的工具调用被序列化成
+    `TOOL_CALL: None(None)`，模型看不到自己调用过什么，于是无限重复同一次调用。
+    """
     tc_lines = []
     for tc in tool_calls:
         fn = _safe_nested_get(tc, "function")
         if not fn:
             continue
-        fname = _safe_nested_get(fn, "name", "")
-        args_str = _safe_nested_get(fn, "arguments", "{}")
+        fname = _safe_nested_get(fn, "name", default="") or ""
+        args_str = _safe_nested_get(fn, "arguments", default="{}")
 
         try:
             args = _json.loads(args_str) if isinstance(args_str, str) else args_str
@@ -379,6 +385,119 @@ async def upload_media_to_mimo(
             return None
 
 
+def structured_messages_enabled() -> bool:
+    """结构化历史开关（默认开）。
+
+    `/api/route/chat/completions` 是 OpenAI 兼容端点，能直接吃 role 分离的
+    `messages`（system / user / assistant / tool 实测均可用）。把整段对话压成
+    单条 user 文本（`user: …\\nassistant: …\\ntool: …`）会让模型每一步都重新
+    通读转录并重新规划——实测同一中间态下思考长度是结构化输入的 5~9 倍，
+    长程任务里表现为「每轮都从头回顾一遍」。
+
+    置 `MIMO_STRUCTURED_MESSAGES=0` 可回退到旧的扁平化行为。
+    """
+    v = (__import__("os").getenv("MIMO_STRUCTURED_MESSAGES", "1") or "1").strip().lower()
+    return v not in ("0", "false", "off", "no")
+
+
+def _content_to_text(content) -> str:
+    """把 str / content-parts 统一成纯文本。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return str(content)
+
+
+def build_upstream_messages(
+    messages: list,
+    tools: list = None,
+    passthrough: bool = True,
+) -> list:
+    """构建发往上游的结构化 messages（保留 system / user / assistant / tool 角色）。
+
+    与 `build_query_from_messages` 的区别：不再把转录取平，模型能看到自己的
+    历史轮次与工具结果属于哪个角色，不必每轮重新推断任务状态。
+    工具定义走请求体的原生 `tools` 字段；只有 passthrough=False（老式文本协议）
+    才把工具说明拼进 system。
+    """
+    system_parts: list[str] = []
+    out: list[dict] = []
+    # 历史被裁剪/压缩后可能留下「没有对应调用」的工具结果；OpenAI 兼容端点
+    # 要求 tool 消息必须跟在带匹配 tool_call_id 的 assistant 消息之后，孤儿要丢掉。
+    pending_ids: set[str] = set()
+
+    for msg in messages:
+        role = getattr(msg, "role", None)
+        content = getattr(msg, "content", None)
+        if role is None:
+            continue
+
+        if role == "system":
+            text = _content_to_text(content)
+            if text.strip():
+                system_parts.append(text)
+            continue
+
+        if role == "tool":
+            tcid = getattr(msg, "tool_call_id", "") or ""
+            if tcid not in pending_ids:
+                continue  # 孤儿工具结果（对应调用已被裁掉）
+            out.append({
+                "role": "tool",
+                "tool_call_id": tcid,
+                "content": _content_to_text(content),
+            })
+            continue
+
+        if role == "assistant":
+            item: dict = {"role": "assistant", "content": _content_to_text(content) or None}
+            tcs = getattr(msg, "tool_calls", None)
+            if tcs:
+                item["tool_calls"] = [tc for tc in tcs]
+                pending_ids = {
+                    (tc.get("id") or "") for tc in tcs if isinstance(tc, dict)
+                }
+            else:
+                pending_ids = set()
+            if item["content"] is None and "tool_calls" not in item:
+                continue
+            out.append(item)
+            continue
+
+        # user / 其他
+        pending_ids = set()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    parts.append({"type": "text", "text": item.get("text", "")})
+                elif item.get("type") == "image_url":
+                    parts.append(item)
+            out.append({"role": "user", "content": parts or _content_to_text(content)})
+        else:
+            out.append({"role": "user", "content": _content_to_text(content)})
+
+    if tools and not passthrough:
+        from .tool_call import build_tool_prompt
+
+        tool_prompt = build_tool_prompt(tools, passthrough=False)
+        if tool_prompt:
+            system_parts.append(tool_prompt)
+
+    if system_parts:
+        out.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
+    return out
+
+
 def build_query_from_messages(
     messages: list,
     tools: list = None,
@@ -441,8 +560,10 @@ def build_query_from_messages(
                     text_parts.append(item.get("text", ""))
             content = " ".join(text_parts)
 
-        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            content = _serialize_tool_calls(msg.tool_calls)
+        if getattr(msg, 'tool_calls', None):
+            # 保留助手正文（若有），再附工具调用；旧实现会直接用调用串覆盖正文
+            tc_text = _serialize_tool_calls(msg.tool_calls)
+            content = (content + "\n" + tc_text) if str(content).strip() else tc_text
 
         if role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '') or ''
@@ -549,8 +670,9 @@ def build_chunked_queries(
         if isinstance(content, list):
             text_parts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
             content = " ".join(text_parts)
-        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-            content = _serialize_tool_calls(msg.tool_calls)
+        if getattr(msg, 'tool_calls', None):
+            tc_text = _serialize_tool_calls(msg.tool_calls)
+            content = (content + "\n" + tc_text) if str(content).strip() else tc_text
         if msg.role == "tool":
             tool_call_id = getattr(msg, 'tool_call_id', '') or ''
             clean = __import__('re').sub(r'\[TOOL_RESULT\]\s*', '', content, flags=__import__('re').IGNORECASE).strip()

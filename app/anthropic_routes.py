@@ -42,7 +42,7 @@ from .batch import init_batch_storage as _anthropic_init_batch_storage
 from .mimo_client import MimoClient, MimoApiError
 from .config import config_manager
 from .models import OpenAIMessage
-from .utils import build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
+from .utils import build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo, build_upstream_messages, structured_messages_enabled
 from .tool_call import extract_tool_call, get_tool_names, clean_tool_text
 from .context_compressor import compress_messages, truncate_messages, should_compress
 from .usage_store import add_usage as _add_usage
@@ -302,6 +302,19 @@ async def _anthropic_stream_think_wrapper(
         if ev_type == "usage":
             api_usage = ev
             continue
+        if ev_type == "reasoning":
+            # 原生 reasoning：直接作为 thinking delta 下传，不裁剪空白
+            piece = ev.get("content") or ""
+            if piece:
+                if not st.any_think:
+                    idx = st.next_index
+                    st.next_index += 1
+                    st.think_index = idx
+                    st.think_active = True
+                    st.any_think = True
+                    yield _make_cb_start(idx, {"type": "thinking", "thinking": "", "signature": ""})
+                yield _make_thinking_delta(st.think_index, piece)
+            continue
         chunk = ev.get("content", "")
         if not chunk:
             continue
@@ -545,6 +558,10 @@ async def anthropic_messages(
     query = build_query_from_messages(
         msgs_as_objects, tools=tools_dict, passthrough=passthrough_mode
     )
+    upstream_messages = (
+        build_upstream_messages(msgs_as_objects, tools=tools_dict, passthrough=passthrough_mode)
+        if structured_messages_enabled() else None
+    )
 
     # ── 工具名（用于后续提取） ──
     tool_names = get_tool_names(tools_dict) if tools_dict else None
@@ -556,7 +573,7 @@ async def anthropic_messages(
         async def _wrap():
             mimo_gen = client.stream_api(
                 query, False, model, multi_medias=multi_medias,
-                tools=tools_dict,
+                tools=tools_dict, messages=upstream_messages,
             )
             async for event in _anthropic_stream_think_wrapper(
                 mimo_gen, model, msg_id, tool_names=tool_names,
@@ -578,7 +595,7 @@ async def anthropic_messages(
     try:
         content, think_content, usage, _, native_tool_calls = await client.call_api(
             query, False, model, multi_medias=multi_medias,
-            tools=tools_dict,
+            tools=tools_dict, messages=upstream_messages,
         )
 
         # 保存用量
@@ -588,7 +605,7 @@ async def anthropic_messages(
         # 清理模型输出
         # 优先用上游原生 tool_calls；无原生时回退到文本解析
         tc_list = _normalize_native_tool_calls(native_tool_calls) if native_tool_calls else None
-        content = _strip_tool_result_blocks(content)
+        content = _strip_tool_result_blocks(content, strip=True)
 
         # 提取工具调用
         tool_calls = None
@@ -602,8 +619,8 @@ async def anthropic_messages(
                 if result[1] is not None:
                     content = result[1]  # 使用清理后的文本（含 MiMoML 残留清理）
 
-        content = _strip_tool_name_prefix(content, tool_names or [])
-        content = _strip_mimo_prefix(content)
+        content = _strip_tool_name_prefix(content, tool_names or [], strip=True)
+        content = _strip_mimo_prefix(content, strip=True)
 
         # 构建 OpenAI 格式的非流式响应
         message = {"role": "assistant", "content": content}
@@ -697,6 +714,10 @@ async def anthropic_create_batch_ep(request: Request):
         query = build_query_from_messages(
             msgs_objs, passthrough=config_manager.config.tools_passthrough
         )
+        _upstream_msgs = (
+            build_upstream_messages(msgs_objs, passthrough=config_manager.config.tools_passthrough)
+            if structured_messages_enabled() else None
+        )
 
         account = config_manager.get_next_account()
         if not account:
@@ -704,7 +725,7 @@ async def anthropic_create_batch_ep(request: Request):
 
         client = MimoClient(account)
         try:
-            c, tc, usage, _, _ = await client.call_api(query, False, model)
+            c, tc, usage, _, _ = await client.call_api(query, False, model, messages=_upstream_msgs)
             message = {"role": "assistant", "content": c}
             if tc:
                 message["reasoning_content"] = tc

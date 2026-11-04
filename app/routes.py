@@ -21,7 +21,7 @@ from .models import (
 )
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
-from .utils import parse_curl, build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
+from .utils import parse_curl, build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo, build_upstream_messages, structured_messages_enabled
 from .context_compressor import compress_messages, truncate_messages, should_compress
 from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 from .tool_sieve import StreamSieve
@@ -273,11 +273,15 @@ async def images_generations(
 
 # ─── 文本清洗辅助函数 ────────────────────────────────────────
 
-def _strip_tool_result_blocks(text: str) -> str:
+def _strip_tool_result_blocks(text: str, strip: bool = False) -> str:
     """移除模型幻觉输出的 TOOL_RESULT 标签。
 
     模型看到上下文中 [TOOL_RESULT] 和 <tool_result> 格式后学会复述。
     移除所有已知格式。
+
+    strip=False（默认，流式安全）：不裁剪首尾空白。
+    流式分块中 `" "` / `"\\n"` 这类纯空白块必须原样保留，
+    一旦 strip 就会被上游 `if clean:` 判断丢弃，正文的换行与缩进随之消失。
     """
     if not text:
         return text
@@ -286,7 +290,7 @@ def _strip_tool_result_blocks(text: str) -> str:
     cleaned = re.sub(r'\[tool_result\s+id=\S+\]\s*', '', cleaned, flags=re.IGNORECASE)
     # XML 格式: <tool_result>...</tool_result>（模型学会的另一种格式）
     cleaned = re.sub(r'</?tool_result>\s*', '', cleaned, flags=re.IGNORECASE)
-    return cleaned.strip()
+    return cleaned.strip() if strip else cleaned
 
 
 def _camel_case(name: str) -> str:
@@ -295,27 +299,31 @@ def _camel_case(name: str) -> str:
     return parts[0] + ''.join(p.capitalize() for p in parts[1:])
 
 
-def _strip_tool_name_prefix(text: str, tool_names: list) -> str:
+def _strip_tool_name_prefix(text: str, tool_names: list, strip: bool = False) -> str:
     """去掉模型作为独立 SSE 事件输出的工具名（如 'webSearch'）。
 
     处理 snake_case 和 camelCase 变体，大小写不敏感。
+
+    strip=False（默认，流式安全）：只删工具名前缀，不裁剪首尾空白，
+    否则每个分块的缩进/换行都会被抹掉。
     """
     if not text or not tool_names:
-        return text
+        return text.strip() if strip else text
     variants = []
     for n in tool_names:
         variants.append(re.escape(n))
         if '_' in n:
             variants.append(re.escape(_camel_case(n)))
     escaped = '|'.join(variants)
-    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text.strip(), flags=re.IGNORECASE)
-    return cleaned.strip()
+    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text, flags=re.IGNORECASE)
+    return cleaned.strip() if strip else cleaned
 
 
-def _strip_mimo_prefix(text: str) -> str:
+def _strip_mimo_prefix(text: str, strip: bool = False) -> str:
     """通用 MiMo 原生前缀清理（含 IGNORECASE）。
 
     在 mimo_client 层已过滤 SSE 事件，此处做兜底。
+    strip=False（默认，流式安全）：不裁剪首尾空白。
     """
     if not text:
         return text
@@ -323,18 +331,38 @@ def _strip_mimo_prefix(text: str) -> str:
                 'imageSearch', 'fileSearch', 'getLocation', 'webExtract',
                 'getWeather', 'calculator']
     escaped = '|'.join(re.escape(p) for p in prefixes)
-    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text.strip(), flags=re.IGNORECASE)
-    return cleaned.strip()
+    cleaned = re.sub(rf'^({escaped})\s*\n?', '', text, flags=re.IGNORECASE)
+    return cleaned.strip() if strip else cleaned
 
 
-def _clean_response_text(text: str, tool_names: list = None) -> str:
-    """综合文本清理管道：TOOL_RESULT + 工具前缀 + MiMo前缀 + 工具文本残留。"""
-    text = _strip_tool_result_blocks(text)
+def _clean_response_text(text: str, tool_names: list = None, strip: bool = False) -> str:
+    """综合文本清理管道：TOOL_RESULT + 工具前缀 + MiMo前缀 + 工具文本残留。
+
+    strip 默认 False：流式分块调用必须保留原始空白（换行/缩进/词间空格）。
+    只有聚合后的整段文本（非流式响应）才传 strip=True。
+    """
+    text = _strip_tool_result_blocks(text, strip=strip)
     if tool_names:
-        text = _strip_tool_name_prefix(text, tool_names)
-    text = _strip_mimo_prefix(text)
+        text = _strip_tool_name_prefix(text, tool_names, strip=strip)
+    text = _strip_mimo_prefix(text, strip=strip)
     text = clean_tool_text(text)
-    return text
+    return text.strip() if strip else text
+
+
+def _strip_think_tags(text: str) -> str:
+    """移除正文中残留的 think 标签字面量。
+
+    正文里绝不允许出现裸 `<think>` / `</think>`：一旦上游在正文通道里
+    续写了思考尾巴并带上闭合标签，客户端就会把整段思考显示成正文。
+    """
+    if not text:
+        return text
+    return text.replace(THINK_OPEN, "").replace(THINK_CLOSE, "")
+
+
+def _clean_stream_text(text: str, tool_names: list = None) -> str:
+    """流式正文分块清理：只去标记，完整保留空白（换行/缩进/词间空格）。"""
+    return _strip_think_tags(_clean_response_text(text, tool_names, strip=False))
 
 
 # ─── Think 标签处理 ──────────────────────────────────────────
@@ -621,7 +649,15 @@ def _build_response(
         usage_obj = OpenAIUsage(
             prompt_tokens=usage.get("promptTokens", 0),
             completion_tokens=usage.get("completionTokens", 0),
-            total_tokens=usage.get("promptTokens", 0) + usage.get("completionTokens", 0)
+            total_tokens=usage.get("promptTokens", 0) + usage.get("completionTokens", 0),
+            prompt_tokens_details=(
+                {"cached_tokens": int(usage.get("cachedTokens", 0) or 0)}
+                if usage.get("cachedTokens") else None
+            ),
+            completion_tokens_details=(
+                {"reasoning_tokens": int(usage.get("reasoningTokens", 0) or 0)}
+                if usage.get("reasoningTokens") else None
+            ),
         )
     return OpenAIResponse(
         id=msg_id, object="chat.completion",
@@ -679,6 +715,77 @@ def _build_chunk(
             if 'reasoning' in d:
                 d['reasoning_content'] = reasoning
     return f"data: {json.dumps(data)}\n\n"
+
+
+def _estimate_tokens(text: str) -> int:
+    """粗略估算 token 数（上游未给 usage 时的兜底）。
+
+    CJK 按 1 字 ≈ 1 token，其余按 4 字符 ≈ 1 token。
+    仅用于「上游没返回 usage」时给客户端一个非零的数量级参考。
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+    other = max(0, len(text) - cjk)
+    return max(1, cjk + (other + 3) // 4)
+
+
+def _build_upstream_inputs(messages, tools=None, passthrough=True):
+    """一次构建两种输入：扁平 query（兜底/估算用）+ 结构化 messages（首选）。
+
+    超长时按消息级滑动窗口裁剪（保留 system + 尾部），与旧 QueryGuard 语义一致；
+    结构化模式下不再走 `build_query_from_messages` 里的字符级关键窗口。
+    """
+    from .context_compressor import MAX_QUERY_CHARS, truncate_messages
+    from .utils import _content_to_text as _to_text
+
+    msgs = list(messages)
+    total = sum(len(_to_text(getattr(m, "content", None))) + len(getattr(m, "role", "")) + 2 for m in msgs)
+    if total > MAX_QUERY_CHARS:
+        msgs = truncate_messages(msgs)
+    query = build_query_from_messages(msgs, tools=tools, passthrough=passthrough)
+    upstream_messages = None
+    if structured_messages_enabled():
+        upstream_messages = build_upstream_messages(msgs, tools=tools, passthrough=passthrough)
+    return query, upstream_messages
+
+
+def _build_usage_chunk(
+    msg_id: str, model: str, usage: dict = None,
+    created: int = None, query: str = None, completion_text: str = None,
+) -> str:
+    """OpenAI 标准 usage 收尾 chunk（choices 为空数组 + usage 字段）。
+
+    客户端（如 DSH / pi-ai）从这条 chunk 读取会话 token 数：
+    缺了它，无论上游是否给了 usage，客户端都显示 0。
+    """
+    usage = usage or {}
+    prompt_tokens = int(usage.get("promptTokens", 0) or usage.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(usage.get("completionTokens", 0) or usage.get("completion_tokens", 0) or 0)
+    if not prompt_tokens and query:
+        prompt_tokens = _estimate_tokens(query)
+    if not completion_tokens and completion_text:
+        completion_tokens = _estimate_tokens(completion_text)
+    payload = {
+        "id": msg_id,
+        "object": "chat.completion.chunk",
+        "created": created if created is not None else int(time.time()),
+        "model": model,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+    # 缓存命中 / 推理 token 明细：客户端据此算「真正新读的输入」与缓存命中率
+    cached_tokens = int(usage.get("cachedTokens", 0) or 0)
+    reasoning_tokens = int(usage.get("reasoningTokens", 0) or 0)
+    if cached_tokens:
+        payload["usage"]["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+    if reasoning_tokens:
+        payload["usage"]["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    return f"data: {json.dumps(payload)}\n\n"
 
 
 # ─── 聊天接口 ─────────────────────────────────────────────────
@@ -764,8 +871,9 @@ async def chat_completions(
     # 仍超阈值则按 compression_mode 压缩或裁剪。
     needs_compression = should_compress(request.messages)
 
+    upstream_messages = None
     if not needs_compression:
-        query = build_query_from_messages(
+        query, upstream_messages = _build_upstream_inputs(
             request.messages, tools=tools_dict, passthrough=passthrough_mode
         )
     else:
@@ -777,7 +885,7 @@ async def chat_completions(
         else:
             # 裁剪模式：直接裁剪，不需要 LLM 调用
             request.messages = truncate_messages(request.messages)
-            query = build_query_from_messages(
+            query, upstream_messages = _build_upstream_inputs(
                 request.messages, tools=tools_dict, passthrough=passthrough_mode
             )
             needs_compression = False  # 已裁剪，不需要流式压缩
@@ -792,7 +900,8 @@ async def chat_completions(
                              raw_passthrough=passthrough_mode if needs_compression else None,
                              effective_model=effective_model,
                              prefer_ask_user=prefer_ask_user,
-                             reasoning_effort=reasoning_effort),
+                             reasoning_effort=reasoning_effort,
+                             messages=upstream_messages),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -805,13 +914,15 @@ async def chat_completions(
     if needs_compression:
         # 静默压缩（用户等待中，不额外提示）
         _, request.messages = await compress_messages(request.messages, effective_model, client)
-        query = build_query_from_messages(
+    if upstream_messages is None:
+        query, upstream_messages = _build_upstream_inputs(
             request.messages, tools=tools_dict, passthrough=passthrough_mode
         )
     try:
         content, think_content, usage, citations, native_tool_calls = await client.call_api(
             query, thinking, effective_model, multi_medias,
-            tools=tools_dict, reasoning_effort=reasoning_effort)
+            tools=tools_dict, reasoning_effort=reasoning_effort,
+            messages=upstream_messages)
 
         # 保存用量
         if usage:
@@ -831,8 +942,8 @@ async def chat_completions(
                 if result[1] is not None:
                     content = result[1]  # 使用清理后的文本（含 MiMoML 残留清理）
 
-        # 清理模型输出杂质
-        content = _strip_tool_result_blocks(content)
+        # 清理模型输出杂质（聚合文本，裁剪首尾空白）
+        content = _strip_tool_result_blocks(content, strip=True)
 
         msg_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
@@ -840,7 +951,9 @@ async def chat_completions(
         # 未命中工具调用时兜底清洗标记残留；命中时 extract_tool_call 已返回清洗后文本，不可再 clean（会抹掉标记）
         if not tool_calls:
             content = clean_tool_text(content)
-        content = _strip_tool_name_prefix(content, tool_names)
+        content = _strip_tool_name_prefix(content, tool_names, strip=True)
+        # 正文里绝不留裸 think 标签（否则思考会被当成正文显示）
+        content = _strip_think_tags(content)
 
         if tool_calls:
             # content 物化选项；question→ask_user 仅在客户端是 RikkaHub 时做
@@ -853,12 +966,12 @@ async def chat_completions(
                 finish_reason="tool_calls", usage=usage
             )
         else:
-            full_content = content
-            if think_content:
-                full_content = f"{THINK_OPEN}{think_content}{THINK_CLOSE}\n{content}"
+            # 思考只走 reasoning / reasoning_content 字段。
+            # 旧实现把 <think>…</think> 拼进 content，客户端不解析标签时
+            # 整段思考就会显示成正文（这正是「思考莫名变成直接输出文本」的来源）。
             return _build_response(
                 msg_id, request.model,
-                content=full_content,
+                content=content,
                 reasoning=think_content,
                 finish_reason="stop", usage=usage
             )
@@ -882,6 +995,7 @@ async def _stream_response(
     effective_model: str = None,
     prefer_ask_user: bool = False,
     reasoning_effort: str | None = None,
+    messages: list = None,
 ):
     """流式响应生成器。
 
@@ -912,7 +1026,7 @@ async def _stream_response(
         else:
             yield _build_chunk(msg_id, model, created=created_t, content="正在裁剪上下文，请稍候...")
             compressed_msgs = truncate_messages(raw_messages)
-        query = build_query_from_messages(
+        query, messages = _build_upstream_inputs(
             compressed_msgs, tools=raw_tools, passthrough=raw_passthrough
         )
         yield _build_chunk(msg_id, model, created=created_t, content="处理完成，正在生成回复...")
@@ -932,10 +1046,11 @@ async def _stream_response(
             buffer = ""
             last_usage = None
             upstream_finish_reason = ""
+            streamed_text_parts = []  # 已下发的正文+思考，用于 usage 兜底估算
 
             async for sse_data in client.stream_api(
                 query, thinking, model, multi_medias, tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=reasoning_effort, messages=messages,
             ):
                 ev_type = sse_data.get("type")
                 if ev_type == "tool_calls":
@@ -950,6 +1065,13 @@ async def _stream_response(
                 if ev_type == "usage":
                     last_usage = sse_data
                     continue
+                if ev_type == "reasoning":
+                    # 原生 reasoning：直接进思考通道（不过正文清理、不裁剪空白）
+                    reasoning_piece = sse_data.get("content") or ""
+                    if reasoning_piece:
+                        streamed_text_parts.append(reasoning_piece)
+                        yield _build_chunk(msg_id, model, created=created_t, reasoning=reasoning_piece)
+                    continue
                 chunk = sse_data.get("content", "")
                 if not chunk:
                     continue
@@ -963,7 +1085,7 @@ async def _stream_response(
                         if idx != -1:
                             safe, keep = _safe_flush(buffer[:idx])
                             if safe:
-                                clean = _clean_response_text(safe, tool_names)
+                                clean = _clean_stream_text(safe, tool_names)
                                 if clean:
                                     content_buffer_chunks.append(clean)
                             in_think = True
@@ -972,7 +1094,7 @@ async def _stream_response(
 
                         safe, keep = _safe_flush(buffer)
                         if safe:
-                            clean = _clean_response_text(safe, tool_names)
+                            clean = _clean_stream_text(safe, tool_names)
                             if clean:
                                 content_buffer_chunks.append(clean)
                         buffer = keep
@@ -982,6 +1104,7 @@ async def _stream_response(
                         if idx != -1:
                             safe, keep = _safe_flush(buffer[:idx])
                             if safe:
+                                streamed_text_parts.append(safe)
                                 yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
                             in_think = False
                             buffer = buffer[idx + len(THINK_CLOSE):]
@@ -989,17 +1112,21 @@ async def _stream_response(
 
                         safe, keep = _safe_flush(buffer)
                         if safe:
+                            streamed_text_parts.append(safe)
                             yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
                         buffer = keep
                         break
 
             # 正文留在 buffer 中的追加
             if buffer and not in_think:
-                clean = _clean_response_text(buffer, tool_names)
+                clean = _clean_stream_text(buffer, tool_names)
                 if clean:
                     content_buffer_chunks.append(clean)
             elif buffer and in_think:
+                streamed_text_parts.append(buffer)
                 yield _build_chunk(msg_id, model, created=created_t, reasoning=buffer)
+
+            completion_text = "".join(streamed_text_parts) + "".join(content_buffer_chunks)
 
             if collected_tool_calls:
                 visible = _merge_question_visibility("".join(content_buffer_chunks), collected_tool_calls)
@@ -1013,9 +1140,12 @@ async def _stream_response(
                 yield _build_chunk(msg_id, model, created=created_t,
                                    tool_calls=streaming_tc,
                                    finish_reason=upstream_finish_reason or "tool_calls")
+                # usage 收尾块：客户端靠它读会话 token 数
+                yield _build_usage_chunk(msg_id, model, last_usage, created_t,
+                                         query=query, completion_text=completion_text)
                 yield "data: [DONE]\n\n"
-                if last_usage:
-                    _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
+                _add_usage(model, (last_usage or {}).get("promptTokens", 0) or _estimate_tokens(query),
+                           (last_usage or {}).get("completionTokens", 0) or _estimate_tokens(completion_text))
                 return
 
             # 无工具调用：补发缓冲正文后再发 stop
@@ -1023,9 +1153,11 @@ async def _stream_response(
             for _buffered in content_buffer_chunks:
                 yield _build_chunk(msg_id, model, created=created_t, content=_buffered)
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+            yield _build_usage_chunk(msg_id, model, last_usage, created_t,
+                                     query=query, completion_text=completion_text)
             yield "data: [DONE]\n\n"
-            if last_usage:
-                _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
+            _add_usage(model, (last_usage or {}).get("promptTokens", 0) or _estimate_tokens(query),
+                       (last_usage or {}).get("completionTokens", 0) or _estimate_tokens(completion_text))
 
         else:
             # ═══════════════════════════════════════════════════
@@ -1035,14 +1167,22 @@ async def _stream_response(
             in_think = False
             last_usage = None
             body_sent = False
+            streamed_text_parts = []
 
             pending_text = ""
             async for sse_data in client.stream_api(
                 query, thinking, model, multi_medias, tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=reasoning_effort, messages=messages,
             ):
-                if sse_data.get("type") == "usage":
+                ev_type = sse_data.get("type")
+                if ev_type == "usage":
                     last_usage = sse_data
+                    continue
+                if ev_type == "reasoning":
+                    reasoning_piece = sse_data.get("content") or ""
+                    if reasoning_piece:
+                        streamed_text_parts.append(reasoning_piece)
+                        yield _build_chunk(msg_id, model, created=created_t, reasoning=reasoning_piece)
                     continue
                 chunk = sse_data.get("content", "")
                 if not chunk:
@@ -1056,8 +1196,9 @@ async def _stream_response(
                         if idx != -1:
                             safe, keep = _safe_flush(buffer[:idx])
                             if safe:
-                                clean = _clean_response_text(safe)
+                                clean = _clean_stream_text(safe)
                                 if clean:
+                                    streamed_text_parts.append(clean)
                                     yield _build_chunk(msg_id, model, created=created_t, content=clean)
                                     body_sent = True
                             in_think = True
@@ -1066,8 +1207,9 @@ async def _stream_response(
 
                         safe, keep = _safe_flush(buffer)
                         if safe:
-                            clean = _clean_response_text(safe)
+                            clean = _clean_stream_text(safe)
                             if clean:
+                                streamed_text_parts.append(clean)
                                 yield _build_chunk(msg_id, model, created=created_t, content=clean)
                                 body_sent = True
                         buffer = keep
@@ -1077,6 +1219,7 @@ async def _stream_response(
                         if idx != -1:
                             safe, keep = _safe_flush(buffer[:idx])
                             if safe:
+                                streamed_text_parts.append(safe)
                                 yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
                             in_think = False
                             buffer = buffer[idx + len(THINK_CLOSE):]
@@ -1084,23 +1227,29 @@ async def _stream_response(
 
                         safe, keep = _safe_flush(buffer)
                         if safe:
+                            streamed_text_parts.append(safe)
                             yield _build_chunk(msg_id, model, created=created_t, reasoning=safe)
                         buffer = keep
                         break
 
             # 发送剩余内容
             if buffer:
-                clean = _clean_response_text(buffer)
-                if clean:
-                    if in_think:
-                        yield _build_chunk(msg_id, model, created=created_t, reasoning=clean)
-                    else:
+                if in_think:
+                    streamed_text_parts.append(buffer)
+                    yield _build_chunk(msg_id, model, created=created_t, reasoning=buffer)
+                else:
+                    clean = _clean_stream_text(buffer)
+                    if clean:
+                        streamed_text_parts.append(clean)
                         yield _build_chunk(msg_id, model, created=created_t, content=clean)
 
+            completion_text = "".join(streamed_text_parts)
             yield _build_chunk(msg_id, model, created=created_t, finish_reason="stop")
+            yield _build_usage_chunk(msg_id, model, last_usage, created_t,
+                                     query=query, completion_text=completion_text)
             yield "data: [DONE]\n\n"
-            if last_usage:
-                _add_usage(model, last_usage.get("promptTokens", 0), last_usage.get("completionTokens", 0))
+            _add_usage(model, (last_usage or {}).get("promptTokens", 0) or _estimate_tokens(query),
+                       (last_usage or {}).get("completionTokens", 0) or _estimate_tokens(completion_text))
 
     except httpx.ReadTimeout:
         # 连接读取超时 — 发送优雅结束
@@ -1778,14 +1927,15 @@ async def _do_response_chat(body: dict, account) -> tuple:
             _, openai_messages = await compress_messages(openai_messages, effective_model, client)
         else:
             openai_messages = truncate_messages(openai_messages)
-    query = build_query_from_messages(
+    query, upstream_messages = _build_upstream_inputs(
         openai_messages, tools=tools_dict, passthrough=config_manager.config.tools_passthrough
     )
 
     thinking = False
     try:
         content, think_content, usage, citations, native_tool_calls = await client.call_api(
-            query, thinking, effective_model, multi_medias, tools=tools_dict
+            query, thinking, effective_model, multi_medias, tools=tools_dict,
+            messages=upstream_messages,
         )
     except MimoApiError as e:
         raise HTTPException(
@@ -1798,7 +1948,7 @@ async def _do_response_chat(body: dict, account) -> tuple:
         raise HTTPException(status_code=500, detail={"error": {"message": str(e)}})
 
     # 清理输出
-    content = _strip_tool_result_blocks(content)
+    content = _strip_tool_result_blocks(content, strip=True)
 
     # 额外处理：模型可能输出多个 think 块，_parse_think_tags 只剥除了第一个
     remaining_thinks = []
@@ -1840,7 +1990,8 @@ async def _do_response_chat(body: dict, account) -> tuple:
     # 未命中工具调用时兜底清洗标记残留；命中时 extract_tool_call 已返回清洗后文本，不可再 clean（会抹掉标记）
     if not tool_calls:
         content = clean_tool_text(content)
-    content = _strip_tool_name_prefix(content, tool_names)
+    content = _strip_tool_name_prefix(content, tool_names, strip=True)
+    content = _strip_think_tags(content)
 
     if tool_calls:
         for tc in tool_calls:
@@ -1928,7 +2079,7 @@ async def _stream_response_events(body: dict, account):
             _, openai_messages = await compress_messages(openai_messages, effective_model, client)
         else:
             openai_messages = truncate_messages(openai_messages)
-    query = build_query_from_messages(
+    query, upstream_messages = _build_upstream_inputs(
         openai_messages, tools=tools_dict, passthrough=config_manager.config.tools_passthrough
     )
     thinking = False
@@ -1989,10 +2140,29 @@ async def _stream_response_events(body: dict, account):
             buffer = ""
 
             async for sse_data in client.stream_api(
-                query, thinking, effective_model, multi_medias, tools=tools_dict
+                query, thinking, effective_model, multi_medias, tools=tools_dict,
+                messages=upstream_messages,
             ):
                 if sse_data.get("type") == "usage":
                     api_usage = sse_data
+                    continue
+                if sse_data.get("type") == "reasoning":
+                    # 原生 reasoning 事件：直接进 reasoning 通道，不裁剪空白
+                    piece = sse_data.get("content") or ""
+                    if piece:
+                        reasoning_parts.append(piece)
+                        if len(reasoning_parts) == 1:
+                            item = _response_reasoning_item("", reasoning_item_id)
+                            oi, start_evt = _start_output_item(item)
+                            if start_evt:
+                                yield start_evt
+                        yield {
+                            "type": "response.reasoning_text.delta",
+                            "item_id": reasoning_item_id,
+                            "output_index": output_indices.get(reasoning_item_id, 0),
+                            "content_index": 0,
+                            "delta": piece,
+                        }
                     continue
                 if sse_data.get("type") == "tool_calls":
                     for tc in sse_data.get("calls") or []:
@@ -2035,7 +2205,7 @@ async def _stream_response_events(body: dict, account):
                             if safe:
                                 for ev in sieve.feed(safe):
                                     if ev.type == 'text':
-                                        clean = _clean_response_text(ev.data, tool_names)
+                                        clean = _clean_stream_text(ev.data, tool_names)
                                         if clean:
                                             text_parts.append(clean)
                                             if not content_started:
@@ -2066,7 +2236,7 @@ async def _stream_response_events(body: dict, account):
                         if safe:
                             for ev in sieve.feed(safe):
                                 if ev.type == 'text':
-                                    clean = _clean_response_text(ev.data, tool_names)
+                                    clean = _clean_stream_text(ev.data, tool_names)
                                     if clean:
                                         text_parts.append(clean)
                                         if not content_started:
@@ -2161,7 +2331,7 @@ async def _stream_response_events(body: dict, account):
             if buffer and not in_think:
                 for ev in sieve.feed(buffer):
                     if ev.type == 'text':
-                        clean = _clean_response_text(ev.data, tool_names)
+                        clean = _clean_stream_text(ev.data, tool_names)
                         if clean:
                             text_parts.append(clean)
                             if not content_started:
@@ -2187,7 +2357,7 @@ async def _stream_response_events(body: dict, account):
 
             for ev in sieve.flush():
                 if ev.type == 'text':
-                    clean = _clean_response_text(ev.data, tool_names)
+                    clean = _clean_stream_text(ev.data, tool_names)
                     if clean:
                         text_parts.append(clean)
                         if not content_started:
@@ -2241,9 +2411,28 @@ async def _stream_response_events(body: dict, account):
             in_think = False
             buffer = ""
 
-            async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias):
+            async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias,
+                                                     messages=upstream_messages):
                 if sse_data.get("type") == "usage":
                     api_usage = sse_data
+                    continue
+                if sse_data.get("type") == "reasoning":
+                    # 原生 reasoning 事件：直接进 reasoning 通道，不裁剪空白
+                    piece = sse_data.get("content") or ""
+                    if piece:
+                        reasoning_parts.append(piece)
+                        if len(reasoning_parts) == 1:
+                            item = _response_reasoning_item("", reasoning_item_id)
+                            oi, start_evt = _start_output_item(item)
+                            if start_evt:
+                                yield start_evt
+                        yield {
+                            "type": "response.reasoning_text.delta",
+                            "item_id": reasoning_item_id,
+                            "output_index": output_indices.get(reasoning_item_id, 0),
+                            "content_index": 0,
+                            "delta": piece,
+                        }
                     continue
                 chunk = sse_data.get("content", "")
                 if not chunk:
@@ -2257,7 +2446,7 @@ async def _stream_response_events(body: dict, account):
                         if idx != -1:
                             safe, keep = _safe_flush(buffer[:idx])
                             if safe:
-                                clean = _clean_response_text(safe)
+                                clean = _clean_stream_text(safe)
                                 if clean:
                                     text_parts.append(clean)
                                     if not content_started:
@@ -2286,7 +2475,7 @@ async def _stream_response_events(body: dict, account):
 
                         safe, keep = _safe_flush(buffer)
                         if safe:
-                            clean = _clean_response_text(safe)
+                            clean = _clean_stream_text(safe)
                             if clean:
                                 text_parts.append(clean)
                                 if not content_started:
@@ -2352,7 +2541,7 @@ async def _stream_response_events(body: dict, account):
 
             # 发送剩余缓冲区内容
             if buffer:
-                clean = _clean_response_text(buffer)
+                clean = _clean_stream_text(buffer)
                 if clean:
                     if in_think:
                         reasoning_parts.append(clean)

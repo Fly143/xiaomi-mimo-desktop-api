@@ -2,6 +2,24 @@
 
 本文件记录 xiaomi-mimo-desktop-api 的重要变更。协议层历史变更继承自 [MiMo2API](https://github.com/Fly143/MiMo2API)。
 
+## [v1.1.5.5] — 2026-11-03
+
+### 修复
+- **流式正文丢换行与空格** — 清理函数对每个分块都 `strip()`，纯空白分块（`" "` / `"\n"` / 缩进）被裁成空串后丢弃，正文挤成一段（`if a < b and c > d:` → `ifa< bandc>d:`）。`_clean_response_text` 增加 `strip` 开关，流式统一走空白保真的 `_clean_stream_text`
+- **用量明细丢失（缓存命中 / 推理 token 未上报）** — 上游 `usage` 里带 `prompt_tokens_details.cached_tokens` 与 `completion_tokens_details.reasoning_tokens`（实测长前缀第二轮起缓存命中 2048~2304 tokens），代理此前只转发 `prompt_tokens`，客户端把全部输入都算成「新读」，缓存命中率恒为 0。现在两项明细随 usage 一起下发（流式收尾块与非流式响应）
+- **流式响应从不发 usage** — OpenAI 兼容客户端从收尾的 `choices: []` + `usage` 块读会话 token 数；现在在 `finish_reason` 块之后、`[DONE]` 之前补发（工具调用路径同样补发），上游未给 usage 时按字符数估算兜底
+- **思考内容被当作正文输出** — reasoning 不再包成 `<think>…</think>` 文本回炉解析，改为独立事件直通 `reasoning` / `reasoning_content`；非流式不再把思考拼进 `content`；正文统一剥离残留 think 标签
+- **`_split_think_from_content` 吞掉正文前言** — 旧实现把 `</think>` 之前的正文并入思考，改为分段解析（支持多块与未闭合块，正文原样保留）
+- **历史工具调用退化为 `TOOL_CALL: None(None)`** — `_safe_nested_get(fn, "name", "")` 把默认值当成了取键路径，历史里每次工具调用都丢 name/arguments，模型看不到自己调用过什么，于是无限重复同一次调用（实测 7 次空转 → 修后 1 次）
+
+### 新增
+- `tests/test_stream_text_helpers.py` — 上述行为的回归测试（标准库 `unittest`，`python -m unittest discover -s tests`）
+
+### 性能
+- **每轮思考重复「回顾任务」** — 代理把整段对话压成**单条 user 文本**（`user: …\nassistant: …\ntool: …`）发上游，模型每一步都要重读整份转录、重新推断任务状态；长程任务里表现为每轮都从头回顾一遍，思考长度是结构化输入的约 2 倍。
+  上游 `/api/route/chat/completions` 本就是 OpenAI 兼容端点，现改为直接透传 role 分离的 `messages`（system / user / assistant / tool），工具定义仍走原生 `tools` 字段；历史被裁剪后遗留的孤儿 tool 结果会自动丢弃。
+  实测同一中间态：出现「the user wants/asked…」式回顾的比例 **5/5 → 2/5**，思考长度均值 **209 → 96 字符**。置 `MIMO_STRUCTURED_MESSAGES=0` 可回退到旧的扁平化行为。
+
 ## [v1.1.5.4] — 2026-09-18
 
 ### 修复

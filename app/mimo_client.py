@@ -295,6 +295,34 @@ class MimoClient:
                 })
         return out or None
 
+    @staticmethod
+    def _attach_media(messages: list, multi_medias: list | None) -> list:
+        """把已上传的媒体挂到最后一条 user 消息上（结构化模式下不再并入单条 query）。"""
+        if not multi_medias:
+            return messages
+        msgs = [dict(m) for m in messages]
+        idx = None
+        for i in range(len(msgs) - 1, -1, -1):
+            if msgs[i].get("role") == "user":
+                idx = i
+                break
+        if idx is None:
+            return msgs
+        content = msgs[idx].get("content")
+        if isinstance(content, list):
+            parts = list(content)
+        elif content:
+            parts = [{"type": "text", "text": str(content)}]
+        else:
+            parts = []
+        for m in multi_medias or []:
+            url = m.get("url") or m.get("image_url")
+            if url:
+                parts.append({"type": "image_url", "image_url": {"url": url}})
+        if parts:
+            msgs[idx] = {**msgs[idx], "content": parts}
+        return msgs
+
     def _query_body(
         self,
         query: str,
@@ -305,18 +333,27 @@ class MimoClient:
         tools: list | None = None,
         stream: bool = False,
         reasoning_effort: str | None = None,
+        messages: list | None = None,
     ) -> dict:
-        parts: list = [{"type": "text", "text": query}]
-        for m in multi_medias or []:
-            url = m.get("url") or m.get("image_url")
-            if url:
-                parts.append({"type": "image_url", "image_url": {"url": url}})
-        content = parts if len(parts) > 1 else query
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": content}],
-            "stream": stream,
-        }
+        if messages is not None:
+            # 结构化历史：上游 OpenAI 兼容，直接透传 role 分离的 messages。
+            body = {
+                "model": model,
+                "messages": self._attach_media(messages, multi_medias),
+                "stream": stream,
+            }
+        else:
+            parts: list = [{"type": "text", "text": query}]
+            for m in multi_medias or []:
+                url = m.get("url") or m.get("image_url")
+                if url:
+                    parts.append({"type": "image_url", "image_url": {"url": url}})
+            content = parts if len(parts) > 1 else query
+            body = {
+                "model": model,
+                "messages": [{"role": "user", "content": content}],
+                "stream": stream,
+            }
         # 思考强度：显式透传 reasoning_effort（low/medium/high）；
         # 仅 thinking=True 且未给档位时才默认 high（兼容旧调用）。
         if reasoning_effort:
@@ -332,28 +369,35 @@ class MimoClient:
 
     @staticmethod
     def _split_think_from_content(content: str) -> tuple[str, str]:
-        open_tag, close_tag = "<think>", "</think>"
-        if open_tag not in content:
+        """分离 <think> 块与正文。
+
+        逐位累积的旧实现会把 `</think>` 之前的整段正文（含 think 内部文本）
+        一起塞进 think，正文前言被吞掉。此处改为显式分段：正文/思考各自
+        按片段收集，支持多块与未闭合块。正文原样保留，不做 strip。
+        """
+        open_tag, close_tag = THINK_OPEN, THINK_CLOSE
+        if not content or open_tag not in content:
             return content, ""
-        main, think, in_think, buf, i = [], [], False, "", 0
-        while i < len(content):
-            if not in_think and content.startswith(open_tag, i):
-                in_think = True
-                i += len(open_tag)
-                continue
-            if in_think and content.startswith(close_tag, i):
-                in_think = False
-                think.append(buf)
-                buf = ""
-                i += len(close_tag)
-                continue
-            buf += content[i]
-            i += 1
-        if in_think:
-            think.append(buf)
-        else:
-            main.append(buf)
-        return "".join(main), "\n".join(think)
+
+        main_parts: list[str] = []
+        think_parts: list[str] = []
+        rest = content
+        while True:
+            i = rest.find(open_tag)
+            if i == -1:
+                main_parts.append(rest)
+                break
+            main_parts.append(rest[:i])
+            rest = rest[i + len(open_tag):]
+            j = rest.find(close_tag)
+            if j == -1:
+                # 未闭合：剩余全部算思考
+                think_parts.append(rest)
+                break
+            think_parts.append(rest[:j])
+            rest = rest[j + len(close_tag):]
+        think = "\n".join(p for p in think_parts if p.strip())
+        return "".join(main_parts), think
 
     @staticmethod
     def _merge_stream_tool_calls(acc: dict, deltas: list) -> list:
@@ -374,10 +418,11 @@ class MimoClient:
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
         tools: list | None = None, reasoning_effort: str | None = None,
+        messages: list | None = None,
     ) -> Tuple[str, str, dict, list, list]:
         body = self._query_body(
             query, thinking, model, multi_medias, attachments,
-            tools=tools, reasoning_effort=reasoning_effort,
+            tools=tools, reasoning_effort=reasoning_effort, messages=messages,
         )
         data = await self.chat_completion_json(body)
         choice = (data.get("choices") or [{}])[0]
@@ -398,16 +443,22 @@ class MimoClient:
         return content, think, {
             "promptTokens": usage.get("prompt_tokens") or 0,
             "completionTokens": usage.get("completion_tokens") or 0,
+            "totalTokens": usage.get("total_tokens")
+            or (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0),
+            "cachedTokens": (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0,
+            "reasoningTokens": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0,
         }, [], native_tool_calls
 
     async def stream_api(
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
         tools: list | None = None, reasoning_effort: str | None = None,
+        messages: list | None = None,
     ) -> AsyncIterator[dict]:
         body = self._query_body(
             query, thinking, model, multi_medias, attachments,
             tools=tools, stream=True, reasoning_effort=reasoning_effort,
+            messages=messages,
         )
         body["stream_options"] = {"include_usage": True}
         client = httpx.AsyncClient(timeout=TIMEOUT)
@@ -436,6 +487,10 @@ class MimoClient:
                         "type": "usage",
                         "promptTokens": u.get("prompt_tokens") or 0,
                         "completionTokens": u.get("completion_tokens") or 0,
+                        "totalTokens": u.get("total_tokens")
+                        or (u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0),
+                        "cachedTokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0,
+                        "reasoningTokens": (u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0,
                     }
                 for choice in chunk.get("choices") or []:
                     delta = choice.get("delta") or {}
@@ -443,8 +498,10 @@ class MimoClient:
                         yield {"type": "text", "content": delta["content"]}
                     reasoning = delta.get("reasoning_content") or delta.get("reasoning") or ""
                     if reasoning:
-                        # 包成 think 块，routes 既有 THINK_OPEN/CLOSE 逻辑可直接处理
-                        yield {"type": "text", "content": THINK_OPEN + reasoning + THINK_CLOSE}
+                        # 原生 reasoning 作为独立事件下传，不再包成 <think> 文本再回炉解析：
+                        # 回合制包装会让「推理文本里出现 think 标签/正文标签解析」互相污染，
+                        # 导致思考内容被当成正文输出。下游按 ev_type 直接分流，零歧义。
+                        yield {"type": "reasoning", "content": reasoning}
                     if delta.get("tool_calls"):
                         # 仅累积，不 yield 文本（避免被 StreamSieve 当成 MiMoML 标记误解析）
                         self._merge_stream_tool_calls(tc_acc, delta["tool_calls"])
