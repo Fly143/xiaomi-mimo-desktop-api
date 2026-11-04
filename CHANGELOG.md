@@ -14,6 +14,11 @@
 ### 新增
 - `tests/test_stream_text_helpers.py` — 上述行为的回归测试（标准库 `unittest`，`python -m unittest discover -s tests`）
 
+### 性能
+- **每轮思考重复「回顾任务」** — 代理把整段对话压成**单条 user 文本**（`user: …\nassistant: …\ntool: …`）发上游，模型每一步都要重读整份转录、重新推断任务状态；长程任务里表现为每轮都从头回顾一遍，思考长度是结构化输入的约 2 倍。
+  上游 `/api/route/chat/completions` 本就是 OpenAI 兼容端点，现改为直接透传 role 分离的 `messages`（system / user / assistant / tool），工具定义仍走原生 `tools` 字段；历史被裁剪后遗留的孤儿 tool 结果会自动丢弃。
+  实测同一中间态：出现「the user wants/asked…」式回顾的比例 **5/5 → 2/5**，思考长度均值 **209 → 96 字符**。置 `MIMO_STRUCTURED_MESSAGES=0` 可回退到旧的扁平化行为。
+
 ## [v1.1.5.4] — 2026-09-18
 
 ### 修复

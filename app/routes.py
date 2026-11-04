@@ -21,7 +21,7 @@ from .models import (
 )
 from .config import config_manager, MimoAccount
 from .mimo_client import MimoClient, MimoApiError
-from .utils import parse_curl, build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo
+from .utils import parse_curl, build_query_from_messages, build_chunked_queries, extract_medias_from_messages, upload_media_to_mimo, upload_text_file_to_mimo, build_upstream_messages, structured_messages_enabled
 from .context_compressor import compress_messages, truncate_messages, should_compress
 from .tool_call import extract_tool_call, normalize_tool_call, get_tool_names, clean_tool_text  # build_tool_prompt unused
 from .tool_sieve import StreamSieve
@@ -722,6 +722,26 @@ def _estimate_tokens(text: str) -> int:
     return max(1, cjk + (other + 3) // 4)
 
 
+def _build_upstream_inputs(messages, tools=None, passthrough=True):
+    """一次构建两种输入：扁平 query（兜底/估算用）+ 结构化 messages（首选）。
+
+    超长时按消息级滑动窗口裁剪（保留 system + 尾部），与旧 QueryGuard 语义一致；
+    结构化模式下不再走 `build_query_from_messages` 里的字符级关键窗口。
+    """
+    from .context_compressor import MAX_QUERY_CHARS, truncate_messages
+    from .utils import _content_to_text as _to_text
+
+    msgs = list(messages)
+    total = sum(len(_to_text(getattr(m, "content", None))) + len(getattr(m, "role", "")) + 2 for m in msgs)
+    if total > MAX_QUERY_CHARS:
+        msgs = truncate_messages(msgs)
+    query = build_query_from_messages(msgs, tools=tools, passthrough=passthrough)
+    upstream_messages = None
+    if structured_messages_enabled():
+        upstream_messages = build_upstream_messages(msgs, tools=tools, passthrough=passthrough)
+    return query, upstream_messages
+
+
 def _build_usage_chunk(
     msg_id: str, model: str, usage: dict = None,
     created: int = None, query: str = None, completion_text: str = None,
@@ -836,8 +856,9 @@ async def chat_completions(
     # 仍超阈值则按 compression_mode 压缩或裁剪。
     needs_compression = should_compress(request.messages)
 
+    upstream_messages = None
     if not needs_compression:
-        query = build_query_from_messages(
+        query, upstream_messages = _build_upstream_inputs(
             request.messages, tools=tools_dict, passthrough=passthrough_mode
         )
     else:
@@ -849,7 +870,7 @@ async def chat_completions(
         else:
             # 裁剪模式：直接裁剪，不需要 LLM 调用
             request.messages = truncate_messages(request.messages)
-            query = build_query_from_messages(
+            query, upstream_messages = _build_upstream_inputs(
                 request.messages, tools=tools_dict, passthrough=passthrough_mode
             )
             needs_compression = False  # 已裁剪，不需要流式压缩
@@ -864,7 +885,8 @@ async def chat_completions(
                              raw_passthrough=passthrough_mode if needs_compression else None,
                              effective_model=effective_model,
                              prefer_ask_user=prefer_ask_user,
-                             reasoning_effort=reasoning_effort),
+                             reasoning_effort=reasoning_effort,
+                             messages=upstream_messages),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -877,13 +899,15 @@ async def chat_completions(
     if needs_compression:
         # 静默压缩（用户等待中，不额外提示）
         _, request.messages = await compress_messages(request.messages, effective_model, client)
-        query = build_query_from_messages(
+    if upstream_messages is None:
+        query, upstream_messages = _build_upstream_inputs(
             request.messages, tools=tools_dict, passthrough=passthrough_mode
         )
     try:
         content, think_content, usage, citations, native_tool_calls = await client.call_api(
             query, thinking, effective_model, multi_medias,
-            tools=tools_dict, reasoning_effort=reasoning_effort)
+            tools=tools_dict, reasoning_effort=reasoning_effort,
+            messages=upstream_messages)
 
         # 保存用量
         if usage:
@@ -956,6 +980,7 @@ async def _stream_response(
     effective_model: str = None,
     prefer_ask_user: bool = False,
     reasoning_effort: str | None = None,
+    messages: list = None,
 ):
     """流式响应生成器。
 
@@ -986,7 +1011,7 @@ async def _stream_response(
         else:
             yield _build_chunk(msg_id, model, created=created_t, content="正在裁剪上下文，请稍候...")
             compressed_msgs = truncate_messages(raw_messages)
-        query = build_query_from_messages(
+        query, messages = _build_upstream_inputs(
             compressed_msgs, tools=raw_tools, passthrough=raw_passthrough
         )
         yield _build_chunk(msg_id, model, created=created_t, content="处理完成，正在生成回复...")
@@ -1010,7 +1035,7 @@ async def _stream_response(
 
             async for sse_data in client.stream_api(
                 query, thinking, model, multi_medias, tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=reasoning_effort, messages=messages,
             ):
                 ev_type = sse_data.get("type")
                 if ev_type == "tool_calls":
@@ -1132,7 +1157,7 @@ async def _stream_response(
             pending_text = ""
             async for sse_data in client.stream_api(
                 query, thinking, model, multi_medias, tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=reasoning_effort, messages=messages,
             ):
                 ev_type = sse_data.get("type")
                 if ev_type == "usage":
@@ -1887,14 +1912,15 @@ async def _do_response_chat(body: dict, account) -> tuple:
             _, openai_messages = await compress_messages(openai_messages, effective_model, client)
         else:
             openai_messages = truncate_messages(openai_messages)
-    query = build_query_from_messages(
+    query, upstream_messages = _build_upstream_inputs(
         openai_messages, tools=tools_dict, passthrough=config_manager.config.tools_passthrough
     )
 
     thinking = False
     try:
         content, think_content, usage, citations, native_tool_calls = await client.call_api(
-            query, thinking, effective_model, multi_medias, tools=tools_dict
+            query, thinking, effective_model, multi_medias, tools=tools_dict,
+            messages=upstream_messages,
         )
     except MimoApiError as e:
         raise HTTPException(
@@ -2038,7 +2064,7 @@ async def _stream_response_events(body: dict, account):
             _, openai_messages = await compress_messages(openai_messages, effective_model, client)
         else:
             openai_messages = truncate_messages(openai_messages)
-    query = build_query_from_messages(
+    query, upstream_messages = _build_upstream_inputs(
         openai_messages, tools=tools_dict, passthrough=config_manager.config.tools_passthrough
     )
     thinking = False
@@ -2099,7 +2125,8 @@ async def _stream_response_events(body: dict, account):
             buffer = ""
 
             async for sse_data in client.stream_api(
-                query, thinking, effective_model, multi_medias, tools=tools_dict
+                query, thinking, effective_model, multi_medias, tools=tools_dict,
+                messages=upstream_messages,
             ):
                 if sse_data.get("type") == "usage":
                     api_usage = sse_data
@@ -2369,7 +2396,8 @@ async def _stream_response_events(body: dict, account):
             in_think = False
             buffer = ""
 
-            async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias):
+            async for sse_data in client.stream_api(query, thinking, effective_model, multi_medias,
+                                                     messages=upstream_messages):
                 if sse_data.get("type") == "usage":
                     api_usage = sse_data
                     continue

@@ -295,6 +295,34 @@ class MimoClient:
                 })
         return out or None
 
+    @staticmethod
+    def _attach_media(messages: list, multi_medias: list | None) -> list:
+        """把已上传的媒体挂到最后一条 user 消息上（结构化模式下不再并入单条 query）。"""
+        if not multi_medias:
+            return messages
+        msgs = [dict(m) for m in messages]
+        idx = None
+        for i in range(len(msgs) - 1, -1, -1):
+            if msgs[i].get("role") == "user":
+                idx = i
+                break
+        if idx is None:
+            return msgs
+        content = msgs[idx].get("content")
+        if isinstance(content, list):
+            parts = list(content)
+        elif content:
+            parts = [{"type": "text", "text": str(content)}]
+        else:
+            parts = []
+        for m in multi_medias or []:
+            url = m.get("url") or m.get("image_url")
+            if url:
+                parts.append({"type": "image_url", "image_url": {"url": url}})
+        if parts:
+            msgs[idx] = {**msgs[idx], "content": parts}
+        return msgs
+
     def _query_body(
         self,
         query: str,
@@ -305,18 +333,27 @@ class MimoClient:
         tools: list | None = None,
         stream: bool = False,
         reasoning_effort: str | None = None,
+        messages: list | None = None,
     ) -> dict:
-        parts: list = [{"type": "text", "text": query}]
-        for m in multi_medias or []:
-            url = m.get("url") or m.get("image_url")
-            if url:
-                parts.append({"type": "image_url", "image_url": {"url": url}})
-        content = parts if len(parts) > 1 else query
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": content}],
-            "stream": stream,
-        }
+        if messages is not None:
+            # 结构化历史：上游 OpenAI 兼容，直接透传 role 分离的 messages。
+            body = {
+                "model": model,
+                "messages": self._attach_media(messages, multi_medias),
+                "stream": stream,
+            }
+        else:
+            parts: list = [{"type": "text", "text": query}]
+            for m in multi_medias or []:
+                url = m.get("url") or m.get("image_url")
+                if url:
+                    parts.append({"type": "image_url", "image_url": {"url": url}})
+            content = parts if len(parts) > 1 else query
+            body = {
+                "model": model,
+                "messages": [{"role": "user", "content": content}],
+                "stream": stream,
+            }
         # 思考强度：显式透传 reasoning_effort（low/medium/high）；
         # 仅 thinking=True 且未给档位时才默认 high（兼容旧调用）。
         if reasoning_effort:
@@ -381,10 +418,11 @@ class MimoClient:
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
         tools: list | None = None, reasoning_effort: str | None = None,
+        messages: list | None = None,
     ) -> Tuple[str, str, dict, list, list]:
         body = self._query_body(
             query, thinking, model, multi_medias, attachments,
-            tools=tools, reasoning_effort=reasoning_effort,
+            tools=tools, reasoning_effort=reasoning_effort, messages=messages,
         )
         data = await self.chat_completion_json(body)
         choice = (data.get("choices") or [{}])[0]
@@ -411,10 +449,12 @@ class MimoClient:
         self, query: str, thinking: bool = False, model: str = "mimo-x-pro-preview",
         multi_medias: list | None = None, attachments: list | None = None,
         tools: list | None = None, reasoning_effort: str | None = None,
+        messages: list | None = None,
     ) -> AsyncIterator[dict]:
         body = self._query_body(
             query, thinking, model, multi_medias, attachments,
             tools=tools, stream=True, reasoning_effort=reasoning_effort,
+            messages=messages,
         )
         body["stream_options"] = {"include_usage": True}
         client = httpx.AsyncClient(timeout=TIMEOUT)

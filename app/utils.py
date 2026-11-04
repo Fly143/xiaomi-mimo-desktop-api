@@ -385,6 +385,119 @@ async def upload_media_to_mimo(
             return None
 
 
+def structured_messages_enabled() -> bool:
+    """结构化历史开关（默认开）。
+
+    `/api/route/chat/completions` 是 OpenAI 兼容端点，能直接吃 role 分离的
+    `messages`（system / user / assistant / tool 实测均可用）。把整段对话压成
+    单条 user 文本（`user: …\\nassistant: …\\ntool: …`）会让模型每一步都重新
+    通读转录并重新规划——实测同一中间态下思考长度是结构化输入的 5~9 倍，
+    长程任务里表现为「每轮都从头回顾一遍」。
+
+    置 `MIMO_STRUCTURED_MESSAGES=0` 可回退到旧的扁平化行为。
+    """
+    v = (__import__("os").getenv("MIMO_STRUCTURED_MESSAGES", "1") or "1").strip().lower()
+    return v not in ("0", "false", "off", "no")
+
+
+def _content_to_text(content) -> str:
+    """把 str / content-parts 统一成纯文本。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return str(content)
+
+
+def build_upstream_messages(
+    messages: list,
+    tools: list = None,
+    passthrough: bool = True,
+) -> list:
+    """构建发往上游的结构化 messages（保留 system / user / assistant / tool 角色）。
+
+    与 `build_query_from_messages` 的区别：不再把转录取平，模型能看到自己的
+    历史轮次与工具结果属于哪个角色，不必每轮重新推断任务状态。
+    工具定义走请求体的原生 `tools` 字段；只有 passthrough=False（老式文本协议）
+    才把工具说明拼进 system。
+    """
+    system_parts: list[str] = []
+    out: list[dict] = []
+    # 历史被裁剪/压缩后可能留下「没有对应调用」的工具结果；OpenAI 兼容端点
+    # 要求 tool 消息必须跟在带匹配 tool_call_id 的 assistant 消息之后，孤儿要丢掉。
+    pending_ids: set[str] = set()
+
+    for msg in messages:
+        role = getattr(msg, "role", None)
+        content = getattr(msg, "content", None)
+        if role is None:
+            continue
+
+        if role == "system":
+            text = _content_to_text(content)
+            if text.strip():
+                system_parts.append(text)
+            continue
+
+        if role == "tool":
+            tcid = getattr(msg, "tool_call_id", "") or ""
+            if tcid not in pending_ids:
+                continue  # 孤儿工具结果（对应调用已被裁掉）
+            out.append({
+                "role": "tool",
+                "tool_call_id": tcid,
+                "content": _content_to_text(content),
+            })
+            continue
+
+        if role == "assistant":
+            item: dict = {"role": "assistant", "content": _content_to_text(content) or None}
+            tcs = getattr(msg, "tool_calls", None)
+            if tcs:
+                item["tool_calls"] = [tc for tc in tcs]
+                pending_ids = {
+                    (tc.get("id") or "") for tc in tcs if isinstance(tc, dict)
+                }
+            else:
+                pending_ids = set()
+            if item["content"] is None and "tool_calls" not in item:
+                continue
+            out.append(item)
+            continue
+
+        # user / 其他
+        pending_ids = set()
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    parts.append({"type": "text", "text": item.get("text", "")})
+                elif item.get("type") == "image_url":
+                    parts.append(item)
+            out.append({"role": "user", "content": parts or _content_to_text(content)})
+        else:
+            out.append({"role": "user", "content": _content_to_text(content)})
+
+    if tools and not passthrough:
+        from .tool_call import build_tool_prompt
+
+        tool_prompt = build_tool_prompt(tools, passthrough=False)
+        if tool_prompt:
+            system_parts.append(tool_prompt)
+
+    if system_parts:
+        out.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
+    return out
+
+
 def build_query_from_messages(
     messages: list,
     tools: list = None,

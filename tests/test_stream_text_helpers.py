@@ -95,3 +95,86 @@ class UsageChunkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class StructuredMessagesTests(unittest.TestCase):
+    """结构化历史：上游本身支持角色分离，压平会让模型每轮重新回顾任务。"""
+
+    @staticmethod
+    def _msg(**kw):
+        from app.models import OpenAIMessage
+
+        return OpenAIMessage(**kw)
+
+    def test_roles_and_tool_pairing_are_preserved(self):
+        from app.utils import build_upstream_messages
+
+        msgs = [
+            self._msg(role="system", content="SYS"),
+            self._msg(role="user", content="数 .ts"),
+            self._msg(role="assistant", content=None, tool_calls=[{
+                "id": "call_1", "type": "function",
+                "function": {"name": "bash", "arguments": "{}"},
+            }]),
+            self._msg(role="tool", tool_call_id="call_1", content="155"),
+        ]
+        out = build_upstream_messages(msgs)
+        self.assertEqual([m["role"] for m in out], ["system", "user", "assistant", "tool"])
+        self.assertEqual(out[2]["tool_calls"][0]["id"], "call_1")
+        self.assertEqual(out[3]["tool_call_id"], "call_1")
+
+    def test_orphan_tool_result_is_dropped(self):
+        from app.utils import build_upstream_messages
+
+        msgs = [
+            self._msg(role="user", content="u"),
+            self._msg(role="tool", tool_call_id="gone", content="orphan"),
+        ]
+        out = build_upstream_messages(msgs)
+        self.assertEqual([m["role"] for m in out], ["user"])
+
+    def test_system_messages_merged_into_first(self):
+        from app.utils import build_upstream_messages
+
+        msgs = [
+            self._msg(role="system", content="A"),
+            self._msg(role="user", content="u"),
+            self._msg(role="system", content="B"),
+        ]
+        out = build_upstream_messages(msgs)
+        self.assertEqual(out[0], {"role": "system", "content": "A\n\nB"})
+
+    def test_media_attached_to_last_user_message(self):
+        from app.mimo_client import MimoClient
+
+        msgs = [
+            {"role": "user", "content": "看图"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "再一张"},
+        ]
+        out = MimoClient._attach_media(msgs, [{"url": "https://x/img.png"}])
+        self.assertEqual(out[-1]["content"][0], {"type": "text", "text": "再一张"})
+        self.assertEqual(out[-1]["content"][1]["image_url"]["url"], "https://x/img.png")
+        self.assertEqual(out[0]["content"], "看图")
+
+
+class StructuredSwitchTests(unittest.TestCase):
+    def test_default_on_and_env_off(self):
+        import os
+
+        from app.utils import structured_messages_enabled
+
+        old = os.environ.pop("MIMO_STRUCTURED_MESSAGES", None)
+        try:
+            self.assertTrue(structured_messages_enabled())
+            os.environ["MIMO_STRUCTURED_MESSAGES"] = "0"
+            self.assertFalse(structured_messages_enabled())
+        finally:
+            os.environ.pop("MIMO_STRUCTURED_MESSAGES", None)
+            if old is not None:
+                os.environ["MIMO_STRUCTURED_MESSAGES"] = old
+
+
+if __name__ == "__main__":
+    unittest.main()
